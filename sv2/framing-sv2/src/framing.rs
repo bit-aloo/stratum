@@ -21,6 +21,9 @@ use alloc::vec::Vec;
 use binary_sv2::{to_writer, GetSize, Serialize};
 use core::cmp::Ordering;
 
+/// Size of the `channel_id` that opens the payload of a channel message.
+const CHANNEL_ID_SIZE: usize = 4;
+
 #[cfg(not(feature = "with_buffer_pool"))]
 type Slice = Vec<u8>;
 
@@ -79,11 +82,11 @@ impl<T: Serialize + GetSize> EncodableFrame for Sv2Frame<T> {
 
 impl<B: AsMut<[u8]> + AsRef<[u8]>> EncodableFrame for SerializedSv2Frame<B> {
     fn encoded_length(&self) -> usize {
-        self.as_bytes().len()
+        SerializedSv2Frame::encoded_length(self)
     }
 
     fn encode_into(self, dst: &mut [u8]) -> Result<(), Error> {
-        let required = self.as_bytes().len();
+        let required = SerializedSv2Frame::encoded_length(&self);
         let Some(dst) = dst.get_mut(..required) else {
             return Err(Error::DestinationTooShort {
                 required,
@@ -132,7 +135,7 @@ impl<T: Serialize + GetSize> Sv2Frame<T> {
                 actual: dst.len(),
             });
         };
-        to_writer(self.header, dst).map_err(Error::BinarySv2Error)?;
+        self.header.write_into(dst)?;
         to_writer(self.message, &mut dst[Header::SIZE..]).map_err(Error::BinarySv2Error)?;
         Ok(())
     }
@@ -168,16 +171,14 @@ impl<B: AsMut<[u8]> + AsRef<[u8]>> SerializedSv2Frame<B> {
     #[inline]
     pub fn from_bytes(bytes: B) -> Result<Self, SizeHint> {
         let header = Self::parse_header(bytes.as_ref())?;
-        Ok(Self { header, bytes })
+        Ok(Self::from_parts(header, bytes))
     }
 
-    /// Builds a [`SerializedSv2Frame`] from raw bytes, parsing the [`Header`] but not checking the
-    /// payload against the length it declares. Callers that have not already checked that length
-    /// should use [`SerializedSv2Frame::from_bytes`].
+    /// Builds a [`SerializedSv2Frame`] from a [`Header`] already parsed out of `bytes`, so that a
+    /// caller that had to parse one to decide the bytes were complete does not parse it twice.
     #[inline]
-    pub fn from_bytes_unchecked(bytes: B) -> Result<Self, Error> {
-        let header = Header::from_bytes(bytes.as_ref())?;
-        Ok(Self { header, bytes })
+    pub fn from_parts(header: Header, bytes: B) -> Self {
+        Self { header, bytes }
     }
 
     /// Returns the [`Header`] of the frame.
@@ -187,8 +188,23 @@ impl<B: AsMut<[u8]> + AsRef<[u8]>> SerializedSv2Frame<B> {
 
     /// Returns the serialized payload, i.e. everything the frame holds after its [`Header`].
     pub fn payload(&mut self) -> &mut [u8] {
-        // Both constructors parse a header out of `bytes`, so it is at least that long.
         &mut self.bytes.as_mut()[Header::SIZE..]
+    }
+
+    /// Returns the length the frame takes once encoded.
+    #[inline]
+    pub fn encoded_length(&self) -> usize {
+        self.bytes.as_ref().len()
+    }
+
+    /// Returns the `channel_id` the message is destined for, if it has one.
+    pub fn channel_id(&self) -> Option<u32> {
+        if !self.header.channel_msg() {
+            return None;
+        }
+        let payload = self.bytes.as_ref().get(Header::SIZE..)?;
+        let id = payload.get(..CHANNEL_ID_SIZE)?;
+        Some(u32::from_le_bytes(id.try_into().ok()?))
     }
 
     /// Returns the whole frame, header included, as the bytes it was built from.
@@ -214,10 +230,10 @@ impl<B: AsMut<[u8]> + AsRef<[u8]>> SerializedSv2Frame<B> {
         }
     }
 
-    // Parses the header and checks it against the length of `bytes`, returning it only when they
-    // hold exactly one complete frame.
+    /// Parses the [`Header`] and checks it against the length of `bytes`, returning it only when
+    /// they hold exactly one complete frame.
     #[inline]
-    fn parse_header(bytes: &[u8]) -> Result<Header, SizeHint> {
+    pub fn parse_header(bytes: &[u8]) -> Result<Header, SizeHint> {
         let Ok(header) = Header::from_bytes(bytes) else {
             return Err(SizeHint::Missing(Header::SIZE.saturating_sub(bytes.len())));
         };
@@ -324,8 +340,6 @@ mod tests {
         }
     }
 
-    // `get_size` returns a `usize`, so on a 64-bit target a message longer than `u32::MAX` used
-    // to wrap around into a length the U24 check accepts.
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn from_message_rejects_a_size_that_does_not_fit_in_a_u32() {
@@ -333,8 +347,6 @@ mod tests {
         assert!(Sv2Frame::<HugeMsg>::from_message(msg, 0x01, 0x0000, false).is_none());
     }
 
-    // A length that fits in a `u32` but not in the header's U24 is rejected by `Header::from_len`,
-    // the check the `u32` conversion above never reaches.
     #[test]
     fn from_message_rejects_a_size_that_does_not_fit_in_a_u24() {
         const U24_MAX: usize = 16_777_215;
@@ -468,6 +480,38 @@ mod tests {
             CALLS.load(Ordering::Relaxed),
             1,
             "serialize should not walk the message again to check the destination length"
+        );
+    }
+
+    /// The hand-written header serializer must agree byte for byte with the derived one it
+    /// replaced, and round-trip through `Header::from_bytes`.
+    #[quickcheck]
+    fn prop_header_write_into_matches_the_derived_encoding(
+        msg_length: ValidU24,
+        msg_type: u8,
+        extension_type: u16,
+    ) {
+        let header = Header::from_len(msg_length.0, msg_type, extension_type).unwrap();
+
+        let mut hand = [0u8; Header::SIZE];
+        header.write_into(&mut hand).unwrap();
+
+        let mut derived = [0u8; Header::SIZE];
+        binary_sv2::to_writer(header, &mut derived).unwrap();
+        assert_eq!(hand, derived);
+
+        let parsed = Header::from_bytes(&hand).unwrap();
+        assert_eq!(parsed.payload_length(), msg_length.0 as usize);
+        assert_eq!(parsed.msg_type(), msg_type);
+    }
+
+    #[test]
+    fn header_write_into_rejects_a_short_destination() {
+        let header = Header::from_len(0, 0, 0).unwrap();
+        let mut dst = [0u8; Header::SIZE - 1];
+        assert_eq!(
+            header.write_into(&mut dst[..]),
+            Err(Error::UnexpectedHeaderLength(Header::SIZE - 1))
         );
     }
 
@@ -630,11 +674,33 @@ mod tests {
         );
     }
 
+    /// The `channel_msg` bit promises a `U32` `channel_id` at the head of the payload.
     #[test]
-    fn test_from_bytes_unchecked_rejects_short_header() {
+    fn channel_id_is_read_only_when_the_channel_msg_bit_is_set() {
+        let mut bytes = vec![0, 0x80, 1, 4, 0, 0, 0x2a, 0x00, 0x00, 0x00];
+        let frame = SerializedSv2Frame::<Vec<u8>>::from_bytes(bytes.clone()).unwrap();
+        assert!(frame.header().channel_msg());
+        assert_eq!(frame.channel_id(), Some(42));
+
+        bytes[1] = 0;
+        let frame = SerializedSv2Frame::<Vec<u8>>::from_bytes(bytes).unwrap();
+        assert!(!frame.header().channel_msg());
+        assert_eq!(frame.channel_id(), None);
+
+        let short = vec![0, 0x80, 1, 3, 0, 0, 0x2a, 0x00, 0x00];
+        let frame = SerializedSv2Frame::<Vec<u8>>::from_bytes(short).unwrap();
+        assert_eq!(frame.channel_id(), None);
+
+        let empty = vec![0, 0x80, 1, 0, 0, 0];
+        let frame = SerializedSv2Frame::<Vec<u8>>::from_bytes(empty).unwrap();
+        assert_eq!(frame.channel_id(), None);
+    }
+
+    #[test]
+    fn from_bytes_rejects_a_short_header() {
         assert_eq!(
-            SerializedSv2Frame::<Vec<u8>>::from_bytes_unchecked(vec![0, 0, 1, 0, 0]).err(),
-            Some(Error::UnexpectedHeaderLength(5))
+            SerializedSv2Frame::<Vec<u8>>::from_bytes(vec![0, 0, 1, 0, 0]).err(),
+            Some(SizeHint::Missing(1))
         );
     }
 

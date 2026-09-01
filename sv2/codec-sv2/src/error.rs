@@ -5,6 +5,7 @@
 //! convenience.
 
 use core::fmt;
+use framing_sv2::framing::SizeHint;
 #[cfg(feature = "noise_sv2")]
 use noise_sv2::{AeadError, Error as NoiseError};
 
@@ -41,6 +42,9 @@ pub enum Error {
     #[cfg(feature = "noise_sv2")]
     NoiseSv2Error(NoiseError),
 
+    /// The bytes taken out of the decoder buffer do not hold exactly one frame.
+    UnexpectedFrameSize(SizeHint),
+
     /// The decoder buffer held a complete frame followed by the given number of surplus bytes.
     ///
     /// The buffered data, including that complete frame, has already been discarded.
@@ -53,9 +57,9 @@ impl fmt::Display for Error {
         match self {
             #[cfg(feature = "noise_sv2")]
             AeadError(e) => write!(f, "Aead Error: `{e:?}`"),
-            BinarySv2Error(e) => write!(f, "Binary Sv2 Error: `{e:?}`"),
-            FramingSv2Error(e) => write!(f, "Framing Sv2 Error: `{e:?}`"),
-            MissingBytes(u) => write!(f, "Missing `{u}` bytes to fill the decoder read window"),
+            BinarySv2Error(e) => write!(f, "Binary Sv2 Error: `{e}`"),
+            FramingSv2Error(e) => write!(f, "Framing Sv2 Error: `{e}`"),
+            MissingBytes(u) => write!(f, "Missing `{u}` bytes to complete the frame"),
             #[cfg(feature = "noise_sv2")]
             NoiseSv2Error(e) => match e {
                 NoiseError::InvalidCertificate(msg) => {
@@ -65,6 +69,9 @@ impl fmt::Display for Error {
                     write!(f, "Noise SV2 Error: {:?}", other)
                 }
             },
+            UnexpectedFrameSize(hint) => {
+                write!(f, "Buffered bytes do not hold exactly one frame: {hint}")
+            }
             UnexpectedTrailingBytes(u) => {
                 write!(
                     f,
@@ -94,9 +101,48 @@ impl From<framing_sv2::Error> for Error {
     }
 }
 
+impl From<SizeHint> for Error {
+    fn from(hint: SizeHint) -> Self {
+        Error::UnexpectedFrameSize(hint)
+    }
+}
+
 #[cfg(feature = "noise_sv2")]
 impl From<NoiseError> for Error {
     fn from(e: NoiseError) -> Self {
         Error::NoiseSv2Error(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+    use alloc::{string::ToString, vec};
+
+    // `ValueExceedsMaxSize` carries a peer-derived sample and this error is logged, so no
+    // formatting path may write that sample out.
+    #[test]
+    fn binary_error_display_does_not_dump_embedded_payload() {
+        let sample = vec![0xAB_u8; 64 * 1024];
+        let err = Error::BinarySv2Error(binary_sv2::Error::ValueExceedsMaxSize(
+            false,
+            1,
+            1,
+            32,
+            sample,
+            64 * 1024,
+        ));
+
+        let rendered = err.to_string();
+
+        assert!(
+            !rendered.contains("171"),
+            "Display leaked sample bytes: {rendered}"
+        );
+        assert!(
+            rendered.len() < 128,
+            "Display grew with the sample: {} bytes",
+            rendered.len()
+        );
     }
 }

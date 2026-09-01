@@ -66,6 +66,22 @@ impl Header {
         })
     }
 
+    /// Writes the header into the first [`Header::SIZE`] bytes of `dst`.
+    ///
+    /// The mirror of [`Header::from_bytes`]. Going through the derived `Serialize` instead costs
+    /// a `Vec` allocation per frame to emit six bytes.
+    #[inline]
+    pub fn write_into(&self, dst: &mut [u8]) -> Result<(), Error> {
+        if dst.len() < Self::SIZE {
+            return Err(Error::UnexpectedHeaderLength(dst.len()));
+        }
+        dst[0..2].copy_from_slice(&self.extension_type.to_le_bytes());
+        dst[2] = self.msg_type;
+        let msg_length: u32 = self.msg_length.into();
+        dst[3..6].copy_from_slice(&msg_length.to_le_bytes()[..3]);
+        Ok(())
+    }
+
     /// Length of the payload the header declares, not including the header itself.
     #[inline]
     pub fn payload_length(&self) -> usize {

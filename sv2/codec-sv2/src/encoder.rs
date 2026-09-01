@@ -24,14 +24,13 @@
 use framing_sv2::framing::EncodableFrame;
 
 #[cfg(feature = "noise_sv2")]
+use crate::{
+    Result, TransportEncryptState, ENCRYPTED_SV2_FRAME_HEADER_SIZE, SV2_FRAME_PLAINTEXT_CHUNK_SIZE,
+};
+#[cfg(feature = "noise_sv2")]
 use buffer_sv2::AeadBuffer;
 #[cfg(feature = "noise_sv2")]
-use framing_sv2::{framing::HandshakeFrame, SV2_FRAME_CHUNK_SIZE, SV2_FRAME_HEADER_SIZE};
-#[cfg(feature = "noise_sv2")]
-use noise_sv2::AEAD_MAC_LEN;
-
-#[cfg(feature = "noise_sv2")]
-use crate::{Result, TransportEncryptState, ENCRYPTED_SV2_FRAME_HEADER_SIZE};
+use framing_sv2::{framing::HandshakeFrame, SV2_FRAME_HEADER_SIZE};
 
 use crate::Buffer;
 use buffer_sv2::Buffer as IsBuffer;
@@ -73,13 +72,16 @@ pub struct WithNoise<B: IsBuffer> {
 impl<B: IsBuffer + AeadBuffer> WithNoise<B> {
     /// Encodes a handshake frame, which is written out as it is: the handshake that produces
     /// these frames is not done setting up encryption yet.
+    ///
+    /// Nothing about that can fail, so unlike [`Self::encode_transport`] this hands the buffer
+    /// straight back.
     #[inline]
-    pub fn encode_handshake(&mut self, frame: HandshakeFrame) -> Result<B::Slice> {
+    pub fn encode_handshake(&mut self, frame: HandshakeFrame) -> B::Slice {
         let payload = frame.payload();
         let writable = self.noise_buffer.get_writable(payload.len());
         writable.copy_from_slice(payload);
 
-        Ok(self.noise_buffer.get_data_owned())
+        self.noise_buffer.get_data_owned()
     }
 
     /// Serializes an Sv2 frame and encrypts it with the encrypting half of a completed handshake,
@@ -95,14 +97,9 @@ impl<B: IsBuffer + AeadBuffer> WithNoise<B> {
     ) -> Result<B::Slice> {
         self.encrypt_frame(frame, |buf| state.encrypt(buf))?;
 
-        // Clear sv2_buffer
-        self.sv2_buffer.get_data_owned();
-        // Return noise_buffer
         Ok(self.noise_buffer.get_data_owned())
     }
 
-    // Serializes `frame` and encrypts it in place through `encrypt`, leaving the buffers clean if
-    // any step of that fails.
     #[inline]
     fn encrypt_frame<F: EncodableFrame>(
         &mut self,
@@ -112,9 +109,6 @@ impl<B: IsBuffer + AeadBuffer> WithNoise<B> {
         let result = self.try_encrypt_frame(frame, encrypt);
 
         if result.is_err() {
-            // Not a no-op: the write offset and the bytes written so far persist across calls, so
-            // without this the next frame is written at the failing chunk's offset with the remains
-            // of this one in front of it.
             self.noise_buffer.danger_set_start(0);
             self.noise_buffer.get_data_owned();
             self.sv2_buffer.get_data_owned();
@@ -148,21 +142,15 @@ impl<B: IsBuffer + AeadBuffer> WithNoise<B> {
 
         // ENCRYPT THE PAYLOAD IN CHUNKS
         let mut start = SV2_FRAME_HEADER_SIZE;
-        let mut end = if sv2.len() - start < (SV2_FRAME_CHUNK_SIZE - AEAD_MAC_LEN) {
-            sv2.len()
-        } else {
-            SV2_FRAME_CHUNK_SIZE + start - AEAD_MAC_LEN
-        };
         let mut encrypted_len = ENCRYPTED_SV2_FRAME_HEADER_SIZE;
-
         while start < sv2.len() {
+            let end = (start + SV2_FRAME_PLAINTEXT_CHUNK_SIZE).min(sv2.len());
             let to_encrypt = self.noise_buffer.get_writable(end - start);
             to_encrypt.copy_from_slice(&sv2[start..end]);
             self.noise_buffer.danger_set_start(encrypted_len);
             encrypt(&mut self.noise_buffer)?;
             encrypted_len += self.noise_buffer.as_ref().len();
             start = end;
-            end = (start + SV2_FRAME_CHUNK_SIZE - AEAD_MAC_LEN).min(sv2.len());
         }
         self.noise_buffer.danger_set_start(0);
         Ok(())
@@ -178,13 +166,9 @@ impl<B: IsBuffer + AeadBuffer> WithNoise<B> {
 impl WithNoise<Buffer> {
     /// Creates a new `NoiseEncoder` with default buffer sizes.
     pub fn new() -> Self {
-        #[cfg(not(feature = "with_buffer_pool"))]
-        let size = crate::DEFAULT_BUFFER_SIZE;
-        #[cfg(feature = "with_buffer_pool")]
-        let size = crate::DEFAULT_POOL_BUFFER_SIZE;
         Self {
-            sv2_buffer: Buffer::new(size),
-            noise_buffer: Buffer::new(size),
+            sv2_buffer: Buffer::new(crate::DEFAULT_POOL_BUFFER_SIZE),
+            noise_buffer: Buffer::new(crate::DEFAULT_POOL_BUFFER_SIZE),
         }
     }
 }
@@ -234,7 +218,7 @@ impl WithoutNoise<Buffer> {
     /// Creates a new `Encoder` with a buffer of default size.
     pub fn new() -> Self {
         Self {
-            buffer: Buffer::new(crate::DEFAULT_BUFFER_SIZE),
+            buffer: Buffer::new(crate::DEFAULT_POOL_BUFFER_SIZE),
         }
     }
 }
@@ -297,7 +281,7 @@ mod tests {
     #[cfg(feature = "noise_sv2")]
     #[test]
     fn a_frame_shorter_than_a_header_is_rejected_not_panicked_on() {
-        let (mut sender, _) = super::prop_tests::make_transport_state_pair();
+        let (mut sender, _) = crate::test_utils::make_transport_state_pair();
         let mut encoder = NoiseEncoder::new();
 
         for len in 0..SV2_FRAME_HEADER_SIZE {
@@ -316,28 +300,18 @@ mod tests {
 #[cfg(test)]
 mod prop_tests {
     use super::*;
-    #[cfg(feature = "noise_sv2")]
-    use crate::{Handshake, TransportDecryptState, TransportEncryptState};
     use binary_sv2::{Deserialize, Serialize};
     // Not redundant: the glob import above brings in `crate::Result`, whose single type parameter
     // the code generated by the `Deserialize` derive cannot use.
     use core::result::Result;
     use framing_sv2::framing::Sv2Frame;
-    #[cfg(feature = "noise_sv2")]
-    use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
-    #[cfg(feature = "noise_sv2")]
-    use noise_sv2::{ELLSWIFT_ENCODING_SIZE, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE};
     use quickcheck::{Arbitrary, Gen, TestResult};
     use quickcheck_macros::quickcheck;
     #[cfg(feature = "noise_sv2")]
-    use std::convert::TryInto;
-    #[cfg(feature = "noise_sv2")]
-    use std::time::Duration;
-
-    #[cfg(feature = "noise_sv2")]
-    const AUTHORITY_PUBLIC_K: &str = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72";
-    #[cfg(feature = "noise_sv2")]
-    const AUTHORITY_PRIVATE_K: &str = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n";
+    use {
+        crate::test_utils::{decode_noise_frame, make_transport_state_pair},
+        noise_sv2::AEAD_MAC_LEN,
+    };
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
     struct TestMessage {
@@ -396,37 +370,6 @@ mod prop_tests {
         let ok1 = encoder.encode(frame1).is_ok();
         let ok2 = encoder.encode(frame2).is_ok();
         TestResult::from_bool(ok1 && ok2)
-    }
-
-    #[cfg(feature = "noise_sv2")]
-    pub(super) fn make_transport_state_pair() -> (TransportEncryptState, TransportDecryptState) {
-        let pub_k: Secp256k1PublicKey = AUTHORITY_PUBLIC_K.to_string().try_into().unwrap();
-        let pub_k_bytes = pub_k.into_bytes();
-        let priv_k: Secp256k1SecretKey = AUTHORITY_PRIVATE_K.to_string().try_into().unwrap();
-        let priv_k_bytes = priv_k.into_bytes();
-
-        let initiator = noise_sv2::Initiator::from_raw_k(pub_k_bytes).unwrap();
-        let responder = noise_sv2::Responder::from_authority_kp(
-            &pub_k_bytes,
-            &priv_k_bytes,
-            Duration::from_secs(3600),
-        )
-        .unwrap();
-
-        let mut sender = Handshake::new(initiator);
-        let receiver = Handshake::new(responder);
-
-        let msg0 = sender.step_0().unwrap();
-        let msg0: [u8; ELLSWIFT_ENCODING_SIZE] = msg0.payload().try_into().unwrap();
-
-        let (msg1, receiver_transport) = receiver.step_1(msg0).unwrap();
-        let msg1: [u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE] =
-            msg1.payload().try_into().unwrap();
-
-        let sender_transport = sender.step_2(msg1).unwrap();
-        let (sender_enc, _) = sender_transport.split();
-        let (_, receiver_dec) = receiver_transport.split();
-        (sender_enc, receiver_dec)
     }
 
     /// Verifies that encrypting any valid frame with `NoiseEncoder`
@@ -488,19 +431,8 @@ mod prop_tests {
         let encrypted = encoder.encode_transport(next, &mut sender_enc).unwrap();
 
         let mut decoder = crate::StandardNoiseDecoder::new();
-        let mut offset = 0;
-        let mut decoded = loop {
-            let writable = decoder.writable();
-            let len = writable.len();
-            writable.copy_from_slice(&encrypted[offset..offset + len]);
-            offset += len;
-
-            match decoder.next_transport_frame(&mut receiver_dec) {
-                Ok(f) => break f,
-                Err(crate::Error::MissingBytes(_)) => {}
-                Err(e) => panic!("failed to decode the frame after a failed encode: {e:?}"),
-            }
-        };
+        let mut decoded = decode_noise_frame(&mut decoder, &mut receiver_dec, encrypted.as_ref())
+            .expect("failed to decode the frame after a failed encode");
         assert_eq!(
             binary_sv2::from_bytes::<TestMessage>(decoded.payload()).unwrap(),
             TestMessage { value: 2 }
