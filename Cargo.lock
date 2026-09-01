@@ -323,7 +323,6 @@ dependencies = [
  "quickcheck_macros",
  "rand",
  "rayon-core",
- "tracing",
 ]
 
 [[package]]
@@ -542,12 +541,8 @@ dependencies = [
  "binary_sv2",
  "buffer_sv2",
  "criterion",
- "noise_sv2",
  "quickcheck",
  "quickcheck_macros",
- "rand",
- "rayon-core",
- "secp256k1 0.28.2",
 ]
 
 [[package]]
