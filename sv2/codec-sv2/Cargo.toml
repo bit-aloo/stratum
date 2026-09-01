@@ -17,7 +17,6 @@ noise_sv2 = { path = "../noise-sv2", default-features = false, optional = true, 
 binary_sv2 = { path = "../binary-sv2", version = "^7.0.0" }
 buffer_sv2 = { path = "../buffer-sv2", version = "^3.0.0" }
 rand = { workspace = true, default-features = false }
-tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 key-utils = { workspace = true }
@@ -28,9 +27,8 @@ quickcheck_macros = { workspace = true }
 
 [features]
 default = ["std"]
-std = ["noise_sv2?/std", "rand/std", "rand/std_rng", "dep:tracing"]
+std = ["noise_sv2?/std", "rand/std", "rand/std_rng"]
 with_buffer_pool = ["framing_sv2/with_buffer_pool"]
-tracing = ["dep:tracing"]
 
 [package.metadata.docs.rs]
 features = ["with_buffer_pool", "noise_sv2", "std"]

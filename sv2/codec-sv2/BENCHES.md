@@ -31,7 +31,7 @@ cargo bench --bench pool_lifecycle
 
 ### 1. Encoder (`encoder.rs`)
 
-- **`encoder/plain`** — Single-frame encode with a plain `Encoder<T>`
+- **`encoder/plain`** — Single-frame encode with a plain `Encoder`
 - **`encoder/creation/plain`** — `Encoder::new()` overhead
 
 With `noise_sv2` feature:
@@ -52,10 +52,15 @@ Requires `noise_sv2` feature.
 - **`noise/encode_only`** — Noise encode in isolation with a persistent transport session
 - **`noise/handshake/step_0`** — Initiator generates the first EllSwift key-exchange message
 - **`noise/handshake/step_1`** — Responder processes step-0 and generates its response
+- **`noise/encrypted_payload_length`** — `encrypted_payload_length()` across payload sizes: the
+  encrypted size of a declared payload, one MAC per chunk
 
 ### 4. Serialization (`serialization.rs`)
 
-- **`serialization/frame_from_message`** — `Sv2Frame::from_message()`: stores message as `Option<T>`, no serialization yet
+- **`serialization/frame_from_message`** — `Sv2Frame::from_message()`: builds the header and
+  holds the message, no serialization yet
+- **`serialization/frame_serialization_roundtrip`** — `from_message()` followed by
+  `serialize()` into a caller-provided buffer
 
 ### 5. Buffer Pool Exhaustion (`buffer_exhaustion.rs`)
 

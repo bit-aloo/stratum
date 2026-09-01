@@ -18,7 +18,6 @@ libfuzzer-sys = "0.4.10"
 arbitrary = { version = "1.4.2", features = ["derive"] }
 binary_sv2 = { path = "../sv2/binary-sv2"}
 noise_sv2 = { path = "../sv2/noise-sv2" }
-parsers_sv2 = { path = "../sv2/parsers-sv2" }
 framing_sv2 = { path = "../sv2/framing-sv2" }
 codec_sv2 = { path = "../sv2/codec-sv2", features = ["noise_sv2"]}
 common_messages_sv2 = { path = "../sv2/subprotocols/common-messages" }

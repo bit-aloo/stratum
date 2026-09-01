@@ -18,7 +18,7 @@
 // ```
 
 use binary_sv2::{Deserialize, Serialize};
-use framing_sv2::framing::Sv2Frame;
+use framing_sv2::framing::{SerializedSv2Frame, Sv2Frame};
 use std::convert::TryInto;
 
 // Example message type (e.g., SetupConnection)
@@ -36,7 +36,7 @@ fn main() {
     let message = CustomMessage { nonce: 42 };
 
     // Create the frame from the message
-    let frame: Sv2Frame<CustomMessage, Vec<u8>> =
+    let frame: Sv2Frame<CustomMessage> =
         Sv2Frame::from_message(message.clone(), MSG_TYPE, EXT_TYPE, false)
             .expect("Failed to frame the message");
 
@@ -47,13 +47,11 @@ fn main() {
         .expect("Failed to serialize the frame");
 
     // Deserialize the frame from bytes back into an Sv2Frame
-    let mut deserialized_frame = Sv2Frame::<CustomMessage, Vec<u8>>::from_bytes(serialized_frame)
+    let mut deserialized_frame = SerializedSv2Frame::<Vec<u8>>::from_bytes(serialized_frame)
         .expect("Failed to deserialize frame");
 
     // Assert that deserialized header has the original content
-    let deserialized_header = deserialized_frame
-        .get_header()
-        .expect("Frame has no header");
+    let deserialized_header = deserialized_frame.header();
     assert_eq!(deserialized_header.msg_type(), MSG_TYPE);
     assert_eq!(deserialized_header.ext_type(), EXT_TYPE);
 

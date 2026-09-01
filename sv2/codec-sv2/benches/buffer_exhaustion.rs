@@ -6,16 +6,11 @@ use framing_sv2::framing::Sv2Frame;
 use std::time::{Duration, Instant};
 
 mod common;
-use common::{TestMsg, ZeroCopyMsg, ZeroCopyMsgOwned};
-
-#[cfg(not(feature = "with_buffer_pool"))]
-type Slice = Vec<u8>;
-#[cfg(feature = "with_buffer_pool")]
-type Slice = buffer_sv2::Slice;
+use common::{TestMsg, ZeroCopyMsgOwned};
 
 fn zc_enc_buf(coinbase_size: usize) -> Vec<u8> {
     let msg = ZeroCopyMsgOwned::new_owned(1, coinbase_size);
-    let frame = Sv2Frame::<ZeroCopyMsgOwned, Vec<u8>>::from_message(msg, 0, 0, true).unwrap();
+    let frame = Sv2Frame::<ZeroCopyMsgOwned>::from_message(msg, 0, 0, true).unwrap();
     let mut buf = vec![0u8; frame.encoded_length()];
     frame.serialize(&mut buf).unwrap();
     buf
@@ -28,7 +23,7 @@ fn bench_encoder_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut enc = Encoder::<TestMsg>::new();
+                let mut enc = Encoder::new();
                 let frame = Sv2Frame::from_message(TestMsg { data: 42 }, 0, 0, true).unwrap();
                 let t = Instant::now();
                 let _s = enc.encode(black_box(frame)).unwrap();
@@ -42,7 +37,7 @@ fn bench_encoder_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut enc = Encoder::<TestMsg>::new();
+                let mut enc = Encoder::new();
                 let held: Vec<_> = (0u8..8)
                     .map(|i| {
                         enc.encode(Sv2Frame::from_message(TestMsg { data: i }, 0, 0, true).unwrap())
@@ -64,7 +59,7 @@ fn bench_encoder_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut enc = Encoder::<TestMsg>::new();
+                let mut enc = Encoder::new();
                 let held: Vec<_> = (0u8..8)
                     .map(|i| {
                         enc.encode(Sv2Frame::from_message(TestMsg { data: i }, 0, 0, true).unwrap())
@@ -100,7 +95,7 @@ fn bench_encoder_per_slot_latency(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut enc = Encoder::<TestMsg>::new();
+                        let mut enc = Encoder::new();
                         let pre: Vec<_> = (0..held)
                             .map(|i| {
                                 enc.encode(
@@ -135,7 +130,7 @@ fn bench_encoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut enc = Encoder::<ZeroCopyMsgOwned>::new();
+                let mut enc = Encoder::new();
                 let msg = ZeroCopyMsgOwned::new_owned(1, coinbase_size);
                 let frame = Sv2Frame::from_message(msg, 0, 0, true).unwrap();
                 let t = Instant::now();
@@ -151,7 +146,7 @@ fn bench_encoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut enc = Encoder::<ZeroCopyMsgOwned>::new();
+                let mut enc = Encoder::new();
                 // 4 × 108 = 432 B consumed; 80 B remain (not enough for 5th @ 108 B).
                 let held: Vec<_> = (0u32..4)
                     .map(|i| {
@@ -188,7 +183,7 @@ fn bench_encoder_zc_per_slot_latency(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut enc = Encoder::<ZeroCopyMsgOwned>::new();
+                        let mut enc = Encoder::new();
                         let pre: Vec<_> = (0..held)
                             .map(|i| {
                                 let msg = ZeroCopyMsgOwned::new_owned(i as u32, coinbase_size);
@@ -224,7 +219,7 @@ fn bench_encoder_owned_vs_zc_exhaustion(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut enc = Encoder::<TestMsg>::new();
+                        let mut enc = Encoder::new();
                         let pre: Vec<_> = (0..held)
                             .map(|i| {
                                 enc.encode(
@@ -258,7 +253,7 @@ fn bench_encoder_owned_vs_zc_exhaustion(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut enc = Encoder::<ZeroCopyMsgOwned>::new();
+                        let mut enc = Encoder::new();
                         let pre: Vec<_> = (0..held)
                             .map(|i| {
                                 let msg = ZeroCopyMsgOwned::new_owned(i as u32, coinbase_size);
@@ -286,7 +281,7 @@ fn bench_encoder_owned_vs_zc_exhaustion(c: &mut Criterion) {
 
 fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
     let msg = TestMsg { data: 7u8 };
-    let frame = Sv2Frame::<TestMsg, Slice>::from_message(msg, 0, 0, true).unwrap();
+    let frame = Sv2Frame::<TestMsg>::from_message(msg, 0, 0, true).unwrap();
     let mut enc_buf = vec![0u8; frame.encoded_length()];
     frame.serialize(&mut enc_buf).unwrap();
 
@@ -296,7 +291,7 @@ fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut dec = StandardDecoder::<TestMsg>::new();
+                let mut dec = StandardDecoder::new();
                 let w = dec.writable();
                 let len = w.len();
                 w.copy_from_slice(&enc_buf[..len]);
@@ -309,8 +304,9 @@ fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
                             black_box(f);
                             break;
                         }
-                        Err(codec_sv2::Error::MissingBytes(n)) => {
+                        Err(codec_sv2::Error::MissingBytes(_)) => {
                             let w = dec.writable();
+                            let n = w.len();
                             w.copy_from_slice(&enc_buf[offset..offset + n]);
                             offset += n;
                         }
@@ -326,7 +322,7 @@ fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut dec = StandardDecoder::<TestMsg>::new();
+                let mut dec = StandardDecoder::new();
                 let mut held = Vec::with_capacity(9);
 
                 for _ in 0..8 {
@@ -340,8 +336,9 @@ fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
                                 held.push(f);
                                 break;
                             }
-                            Err(codec_sv2::Error::MissingBytes(n)) => {
+                            Err(codec_sv2::Error::MissingBytes(_)) => {
                                 let w = dec.writable();
+                                let n = w.len();
                                 w.copy_from_slice(&enc_buf[offset..offset + n]);
                                 offset += n;
                             }
@@ -362,8 +359,9 @@ fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
                             held.push(f);
                             break;
                         }
-                        Err(codec_sv2::Error::MissingBytes(n)) => {
+                        Err(codec_sv2::Error::MissingBytes(_)) => {
                             let w = dec.writable();
+                            let n = w.len();
                             w.copy_from_slice(&enc_buf[offset..offset + n]);
                             offset += n;
                         }
@@ -381,7 +379,7 @@ fn bench_decoder_pool_back_vs_alloc(c: &mut Criterion) {
 
 fn bench_decoder_per_slot_latency(c: &mut Criterion) {
     let msg = TestMsg { data: 7u8 };
-    let frame = Sv2Frame::<TestMsg, Slice>::from_message(msg, 0, 0, true).unwrap();
+    let frame = Sv2Frame::<TestMsg>::from_message(msg, 0, 0, true).unwrap();
     let mut enc_buf = vec![0u8; frame.encoded_length()];
     frame.serialize(&mut enc_buf).unwrap();
 
@@ -395,7 +393,7 @@ fn bench_decoder_per_slot_latency(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut dec = StandardDecoder::<TestMsg>::new();
+                        let mut dec = StandardDecoder::new();
                         let mut pre = Vec::with_capacity(held + 1);
 
                         for _ in 0..held {
@@ -409,8 +407,9 @@ fn bench_decoder_per_slot_latency(c: &mut Criterion) {
                                         pre.push(f);
                                         break;
                                     }
-                                    Err(codec_sv2::Error::MissingBytes(n)) => {
+                                    Err(codec_sv2::Error::MissingBytes(_)) => {
                                         let w = dec.writable();
+                                        let n = w.len();
                                         w.copy_from_slice(&enc_buf[offset..offset + n]);
                                         offset += n;
                                     }
@@ -431,8 +430,9 @@ fn bench_decoder_per_slot_latency(c: &mut Criterion) {
                                     pre.push(f);
                                     break;
                                 }
-                                Err(codec_sv2::Error::MissingBytes(n)) => {
+                                Err(codec_sv2::Error::MissingBytes(_)) => {
                                     let w = dec.writable();
+                                    let n = w.len();
                                     w.copy_from_slice(&enc_buf[offset..offset + n]);
                                     offset += n;
                                 }
@@ -457,7 +457,7 @@ fn bench_decoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut dec = StandardDecoder::<ZeroCopyMsg<'static>>::new();
+                let mut dec = StandardDecoder::new();
                 let w = dec.writable();
                 let len = w.len();
                 w.copy_from_slice(&enc_buf[..len]);
@@ -470,8 +470,9 @@ fn bench_decoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
                             black_box(f);
                             break;
                         }
-                        Err(codec_sv2::Error::MissingBytes(n)) => {
+                        Err(codec_sv2::Error::MissingBytes(_)) => {
                             let w = dec.writable();
+                            let n = w.len();
                             w.copy_from_slice(&enc_buf[offset..offset + n]);
                             offset += n;
                         }
@@ -487,7 +488,7 @@ fn bench_decoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut dec = StandardDecoder::<ZeroCopyMsg<'static>>::new();
+                let mut dec = StandardDecoder::new();
                 let mut held = Vec::with_capacity(9);
 
                 for _ in 0..8 {
@@ -501,8 +502,9 @@ fn bench_decoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
                                 held.push(f);
                                 break;
                             }
-                            Err(codec_sv2::Error::MissingBytes(n)) => {
+                            Err(codec_sv2::Error::MissingBytes(_)) => {
                                 let w = dec.writable();
+                                let n = w.len();
                                 w.copy_from_slice(&enc_buf[offset..offset + n]);
                                 offset += n;
                             }
@@ -523,8 +525,9 @@ fn bench_decoder_zc_pool_back_vs_alloc(c: &mut Criterion) {
                             held.push(f);
                             break;
                         }
-                        Err(codec_sv2::Error::MissingBytes(n)) => {
+                        Err(codec_sv2::Error::MissingBytes(_)) => {
                             let w = dec.writable();
+                            let n = w.len();
                             w.copy_from_slice(&enc_buf[offset..offset + n]);
                             offset += n;
                         }
@@ -552,7 +555,7 @@ fn bench_decoder_zc_per_slot_latency(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut dec = StandardDecoder::<ZeroCopyMsg<'static>>::new();
+                        let mut dec = StandardDecoder::new();
                         let mut pre = Vec::with_capacity(held + 1);
 
                         for _ in 0..held {
@@ -566,8 +569,9 @@ fn bench_decoder_zc_per_slot_latency(c: &mut Criterion) {
                                         pre.push(f);
                                         break;
                                     }
-                                    Err(codec_sv2::Error::MissingBytes(n)) => {
+                                    Err(codec_sv2::Error::MissingBytes(_)) => {
                                         let w = dec.writable();
+                                        let n = w.len();
                                         w.copy_from_slice(&enc_buf[offset..offset + n]);
                                         offset += n;
                                     }
@@ -588,8 +592,9 @@ fn bench_decoder_zc_per_slot_latency(c: &mut Criterion) {
                                     pre.push(f);
                                     break;
                                 }
-                                Err(codec_sv2::Error::MissingBytes(n)) => {
+                                Err(codec_sv2::Error::MissingBytes(_)) => {
                                     let w = dec.writable();
+                                    let n = w.len();
                                     w.copy_from_slice(&enc_buf[offset..offset + n]);
                                     offset += n;
                                 }
@@ -620,7 +625,7 @@ fn bench_encoder_zc_payload_size_vs_exhaustion(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut enc = Encoder::<ZeroCopyMsgOwned>::new();
+                        let mut enc = Encoder::new();
                         let msg = ZeroCopyMsgOwned::new_owned(1, cs);
                         let t = Instant::now();
                         let _s = enc
@@ -641,7 +646,7 @@ fn bench_encoder_zc_payload_size_vs_exhaustion(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut enc = Encoder::<ZeroCopyMsgOwned>::new();
+                        let mut enc = Encoder::new();
                         let held: Vec<_> = (0..threshold)
                             .map(|i| {
                                 let msg = ZeroCopyMsgOwned::new_owned(i as u32, cs);

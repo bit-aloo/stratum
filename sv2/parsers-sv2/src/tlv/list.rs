@@ -88,7 +88,8 @@ impl<'a> TlvList<'a> {
     /// producing complete frame bytes ready for transmission. It automatically extracts
     /// the message type and channel bit using the `IsSv2Message` trait.
     ///
-    /// The result can be converted to a `StandardSv2Frame` using `StandardSv2Frame::from_bytes()`.
+    /// The result can be converted to a `SerializedSv2Frame` using
+    /// `SerializedSv2Frame::from_bytes()`.
     /// # Example
     /// ```ignore
     /// use parsers_sv2::{TlvList, Tlv, Mining};

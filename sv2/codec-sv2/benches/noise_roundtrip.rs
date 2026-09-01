@@ -1,13 +1,15 @@
 extern crate alloc;
 
 #[cfg(feature = "noise_sv2")]
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 #[cfg(feature = "noise_sv2")]
-use codec_sv2::{HandshakeRole, NoiseEncoder, StandardNoiseDecoder, State};
+use codec_sv2::{
+    Handshake, NoiseEncoder, StandardNoiseDecoder, TransportDecryptState, TransportEncryptState,
+};
 
 #[cfg(feature = "noise_sv2")]
-use framing_sv2::framing::{Frame, Sv2Frame};
+use framing_sv2::framing::Sv2Frame;
 
 #[cfg(feature = "noise_sv2")]
 use noise_sv2::{Initiator, Responder};
@@ -19,10 +21,10 @@ use common::TestMsg;
 
 #[cfg(feature = "noise_sv2")]
 fn setup_noise_engine_pair() -> (
-    NoiseEncoder<TestMsg>,
-    StandardNoiseDecoder<TestMsg>,
-    State,
-    State,
+    NoiseEncoder,
+    StandardNoiseDecoder,
+    TransportEncryptState,
+    TransportDecryptState,
 ) {
     use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 
@@ -43,28 +45,25 @@ fn setup_noise_engine_pair() -> (
     )
     .unwrap();
 
-    let mut sender_state = State::initialized(HandshakeRole::Initiator(initiator));
-    let mut receiver_state = State::initialized(HandshakeRole::Responder(responder));
+    let mut sender = Handshake::new(initiator);
+    let receiver = Handshake::new(responder);
 
-    let first_message = sender_state.step_0().unwrap();
-    let first_message_bytes: [u8; noise_sv2::ELLSWIFT_ENCODING_SIZE] = first_message
-        .get_payload_when_handshaking()
-        .try_into()
-        .unwrap();
+    let first_message = sender.step_0().unwrap();
+    let first_message_bytes: [u8; noise_sv2::ELLSWIFT_ENCODING_SIZE] =
+        first_message.payload().try_into().unwrap();
 
-    let (second_message, receiver_state) = receiver_state.step_1(first_message_bytes).unwrap();
+    let (second_message, receiver_transport) = receiver.step_1(first_message_bytes).unwrap();
     let second_message_bytes: [u8; noise_sv2::INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE] =
-        second_message
-            .get_payload_when_handshaking()
-            .try_into()
-            .unwrap();
+        second_message.payload().try_into().unwrap();
 
-    let sender_state = sender_state.step_2(second_message_bytes).unwrap();
+    let sender_transport = sender.step_2(second_message_bytes).unwrap();
 
-    let enc = NoiseEncoder::<TestMsg>::new();
-    let dec = StandardNoiseDecoder::<TestMsg>::new();
+    let enc = NoiseEncoder::new();
+    let dec = StandardNoiseDecoder::new();
 
-    (enc, dec, sender_state, receiver_state)
+    let (sender_encrypt, _) = sender_transport.split();
+    let (_, receiver_decrypt) = receiver_transport.split();
+    (enc, dec, sender_encrypt, receiver_decrypt)
 }
 
 #[cfg(feature = "noise_sv2")]
@@ -77,26 +76,28 @@ fn bench_noise_roundtrip(c: &mut Criterion) {
             let (mut enc, _, mut enc_state, mut dec_state) = setup_noise_engine_pair();
 
             // Encode
-            let sv2_frame = Sv2Frame::from_message(msg.clone(), 0, 0, true).unwrap();
-            let frame = Frame::Sv2(sv2_frame);
-            let encrypted = enc.encode(black_box(frame), &mut enc_state).unwrap();
+            let frame = Sv2Frame::from_message(msg.clone(), 0, 0, true).unwrap();
+            let encrypted = enc
+                .encode_transport(black_box(frame), &mut enc_state)
+                .unwrap();
 
             // Decode
-            let mut dec = StandardNoiseDecoder::<TestMsg>::new();
+            let mut dec = StandardNoiseDecoder::new();
             let w = dec.writable();
             let len = w.len();
             w[..len].copy_from_slice(&encrypted[0..len]);
             let mut offset = len;
 
             loop {
-                match dec.next_frame(&mut dec_state) {
+                match dec.next_transport_frame(&mut dec_state) {
                     Ok(decoded) => {
                         black_box(decoded);
                         break;
                     }
-                    Err(codec_sv2::Error::MissingBytes(n)) => {
+                    Err(codec_sv2::Error::MissingBytes(_)) => {
                         let w = dec.writable();
-                        w[..n].copy_from_slice(&encrypted[offset..offset + n]);
+                        let n = w.len();
+                        w.copy_from_slice(&encrypted[offset..offset + n]);
                         offset += n;
                     }
                     Err(e) => panic!("Decode error: {:?}", e),
@@ -114,12 +115,32 @@ fn bench_noise_encode_only(c: &mut Criterion) {
         let msg = TestMsg { data: 42u8 };
 
         b.iter(|| {
-            let sv2_frame = Sv2Frame::from_message(msg.clone(), 0, 0, true).unwrap();
-            let frame = Frame::Sv2(sv2_frame);
-            let encrypted = enc.encode(black_box(frame), &mut enc_state).unwrap();
+            let frame = Sv2Frame::from_message(msg.clone(), 0, 0, true).unwrap();
+            let encrypted = enc
+                .encode_transport(black_box(frame), &mut enc_state)
+                .unwrap();
             black_box(encrypted);
         })
     });
+}
+
+// Benchmarks calculating the encrypted length of a payload from its header
+#[cfg(feature = "noise_sv2")]
+fn bench_encrypted_payload_length(c: &mut Criterion) {
+    use framing_sv2::header::Header;
+
+    let mut group = c.benchmark_group("noise/encrypted_payload_length");
+
+    for &size in &[64usize, 1024, 16384, 61440, 16_777_215] {
+        let mut header_bytes = vec![0u8; 6];
+        header_bytes[3..6].copy_from_slice(&(size as u32).to_le_bytes()[..3]);
+        let header = Header::from_bytes(&header_bytes).unwrap();
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| black_box(codec_sv2::encrypted_payload_length(&header)))
+        });
+    }
+
+    group.finish();
 }
 
 #[cfg(feature = "noise_sv2")]
@@ -136,9 +157,9 @@ fn bench_noise_handshake_steps(c: &mut Criterion) {
                 AUTHORITY_PUBLIC_K.to_string().try_into().unwrap();
 
             let initiator = Initiator::from_raw_k(authority_public_k.into_bytes()).unwrap();
-            let mut sender_state = State::initialized(HandshakeRole::Initiator(initiator));
+            let mut sender = Handshake::new(initiator);
 
-            let first_message = sender_state.step_0().unwrap();
+            let first_message = sender.step_0().unwrap();
             black_box(first_message);
         })
     });
@@ -151,13 +172,11 @@ fn bench_noise_handshake_steps(c: &mut Criterion) {
             AUTHORITY_PRIVATE_K.to_string().try_into().unwrap();
 
         let initiator = Initiator::from_raw_k(authority_public_k.into_bytes()).unwrap();
-        let mut sender_state = State::initialized(HandshakeRole::Initiator(initiator));
+        let mut sender = Handshake::new(initiator);
 
-        let first_message = sender_state.step_0().unwrap();
-        let first_message_bytes: [u8; noise_sv2::ELLSWIFT_ENCODING_SIZE] = first_message
-            .get_payload_when_handshaking()
-            .try_into()
-            .unwrap();
+        let first_message = sender.step_0().unwrap();
+        let first_message_bytes: [u8; noise_sv2::ELLSWIFT_ENCODING_SIZE] =
+            first_message.payload().try_into().unwrap();
 
         b.iter(|| {
             let responder = Responder::from_authority_kp(
@@ -167,8 +186,8 @@ fn bench_noise_handshake_steps(c: &mut Criterion) {
             )
             .unwrap();
 
-            let mut receiver_state = State::initialized(HandshakeRole::Responder(responder));
-            let (second_message, _) = receiver_state.step_1(first_message_bytes).unwrap();
+            let receiver = Handshake::new(responder);
+            let (second_message, _) = receiver.step_1(first_message_bytes).unwrap();
             black_box(second_message);
         })
     });
@@ -179,7 +198,8 @@ criterion_group!(
     noise_benches,
     bench_noise_roundtrip,
     bench_noise_encode_only,
-    bench_noise_handshake_steps
+    bench_noise_handshake_steps,
+    bench_encrypted_payload_length
 );
 
 #[cfg(feature = "noise_sv2")]

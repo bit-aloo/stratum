@@ -7,21 +7,15 @@ use framing_sv2::framing::Sv2Frame;
 mod common;
 use common::TestMsg;
 
-#[cfg(not(feature = "with_buffer_pool"))]
-type Slice = Vec<u8>;
-
-#[cfg(feature = "with_buffer_pool")]
-type Slice = buffer_sv2::Slice;
-
 fn bench_plain_decoder(c: &mut Criterion) {
     c.bench_function("decoder/plain", |b| {
         let msg = TestMsg { data: 7u8 };
-        let frame = Sv2Frame::<TestMsg, Slice>::from_message(msg, 0, 0, true).unwrap();
+        let frame = Sv2Frame::<TestMsg>::from_message(msg, 0, 0, true).unwrap();
 
         let mut enc_buf = vec![0; frame.encoded_length()];
         frame.serialize(&mut enc_buf).unwrap();
 
-        let mut dec = StandardDecoder::<TestMsg>::new();
+        let mut dec = StandardDecoder::new();
 
         b.iter(|| {
             let w = dec.writable();
@@ -35,8 +29,9 @@ fn bench_plain_decoder(c: &mut Criterion) {
                         black_box(frame);
                         break;
                     }
-                    Err(codec_sv2::Error::MissingBytes(n)) => {
+                    Err(codec_sv2::Error::MissingBytes(_)) => {
                         let w = dec.writable();
+                        let n = w.len();
                         w.copy_from_slice(&enc_buf[offset..offset + n]);
                         offset += n;
                     }
@@ -50,7 +45,7 @@ fn bench_plain_decoder(c: &mut Criterion) {
 fn bench_decoder_creation(c: &mut Criterion) {
     c.bench_function("decoder/creation/plain", |b| {
         b.iter(|| {
-            let dec = StandardDecoder::<TestMsg>::new();
+            let dec = StandardDecoder::new();
             black_box(dec);
         })
     });

@@ -2455,9 +2455,7 @@ impl<T: Into<CommonMessagesOwned>> From<T> for MiningDeviceMessagesOwned {
     }
 }
 
-impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<AnyMessage<'decoder>>
-    for Sv2Frame<AnyMessage<'decoder>, B>
-{
+impl<'decoder> TryFrom<AnyMessage<'decoder>> for Sv2Frame<AnyMessage<'decoder>> {
     type Error = ParserError;
 
     fn try_from(v: AnyMessage<'decoder>) -> Result<Self, ParserError> {
@@ -2469,7 +2467,7 @@ impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<AnyMessage<'decoder>>
     }
 }
 
-impl<B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<AnyMessageOwned> for Sv2Frame<AnyMessageOwned, B> {
+impl TryFrom<AnyMessageOwned> for Sv2Frame<AnyMessageOwned> {
     type Error = ParserError;
 
     fn try_from(v: AnyMessageOwned) -> Result<Self, ParserError> {
@@ -2483,7 +2481,7 @@ impl<B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<AnyMessageOwned> for Sv2Frame<AnyMess
 
 macro_rules! impl_owned_frame_try_from {
     ($message:ty) => {
-        impl<B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<$message> for Sv2Frame<$message, B> {
+        impl TryFrom<$message> for Sv2Frame<$message> {
             type Error = ParserError;
 
             fn try_from(v: $message) -> Result<Self, ParserError> {
@@ -2503,8 +2501,8 @@ impl_owned_frame_try_from!(JobDeclarationOwned);
 impl_owned_frame_try_from!(TemplateDistributionOwned);
 impl_owned_frame_try_from!(ExtensionsOwned);
 
-impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<MiningDeviceMessages<'decoder>>
-    for Sv2Frame<MiningDeviceMessages<'decoder>, B>
+impl<'decoder> TryFrom<MiningDeviceMessages<'decoder>>
+    for Sv2Frame<MiningDeviceMessages<'decoder>>
 {
     type Error = ParserError;
 
@@ -2517,9 +2515,7 @@ impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<MiningDeviceMessages<'decod
     }
 }
 
-impl<B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<MiningDeviceMessagesOwned>
-    for Sv2Frame<MiningDeviceMessagesOwned, B>
-{
+impl TryFrom<MiningDeviceMessagesOwned> for Sv2Frame<MiningDeviceMessagesOwned> {
     type Error = ParserError;
 
     fn try_from(v: MiningDeviceMessagesOwned) -> Result<Self, ParserError> {
@@ -2531,8 +2527,8 @@ impl<B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<MiningDeviceMessagesOwned>
     }
 }
 
-impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<TemplateDistribution<'decoder>>
-    for Sv2Frame<TemplateDistribution<'decoder>, B>
+impl<'decoder> TryFrom<TemplateDistribution<'decoder>>
+    for Sv2Frame<TemplateDistribution<'decoder>>
 {
     type Error = ParserError;
 
@@ -2663,7 +2659,7 @@ mod test {
     use alloc::vec;
     use alloc::vec::Vec;
     use binary_sv2::{Seq0255, Seq064K, Str0255, Sv2Option, B0255, B032, B064K, U256};
-    use codec_sv2::StandardSv2Frame;
+    use codec_sv2::Sv2Frame;
     use core::convert::{TryFrom, TryInto};
     use extensions_sv2::{RequestExtensions, EXTENSION_TYPE_EXTENSIONS_NEGOTIATION};
     use job_declaration_sv2::PushSolution;
@@ -2672,7 +2668,7 @@ mod test {
     };
 
     pub type Message<'a> = AnyMessage<'a>;
-    pub type StdFrame<'a> = StandardSv2Frame<Message<'a>>;
+    pub type StdFrame<'a> = Sv2Frame<Message<'a>>;
 
     #[test]
     fn request_extensions_serialization() {

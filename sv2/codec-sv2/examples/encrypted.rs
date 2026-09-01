@@ -18,12 +18,7 @@
 
 use binary_sv2::{Deserialize, Serialize};
 #[cfg(feature = "noise_sv2")]
-use codec_sv2::{
-    Error, HandshakeRole, NoiseEncoder, StandardEitherFrame, StandardNoiseDecoder,
-    StandardSv2Frame, State,
-};
-#[cfg(feature = "noise_sv2")]
-use framing_sv2::framing::Sv2Frame;
+use codec_sv2::{Error, Handshake, NoiseEncoder, StandardNoiseDecoder, Sv2Frame};
 #[cfg(feature = "noise_sv2")]
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 #[cfg(feature = "noise_sv2")]
@@ -118,19 +113,19 @@ fn main() {
     )
     .expect("Failed to initialize responder from pub/key pair and/or cert");
 
-    let mut sender_state = State::initialized(HandshakeRole::Initiator(initiator));
-    let mut receiver_state = State::initialized(HandshakeRole::Responder(responder));
+    let mut sender = Handshake::new(initiator);
+    let receiver = Handshake::new(responder);
 
-    let first_message = sender_state
+    let first_message = sender
         .step_0()
         .expect("Initiator failed first step of handshake");
     let first_message: [u8; ELLSWIFT_ENCODING_SIZE] = first_message
-        .get_payload_when_handshaking()
+        .payload()
         .try_into()
         .expect("Handshake remote invlaid message");
 
     #[cfg(feature = "std")]
-    let (second_message, receiver_state) = receiver_state
+    let (second_message, receiver_transport) = receiver
         .step_1(first_message)
         .expect("Responder failed second step of handshake");
     #[cfg(not(feature = "std"))]
@@ -139,16 +134,16 @@ fn main() {
         .unwrap()
         .as_secs() as u32;
     #[cfg(not(feature = "std"))]
-    let (second_message, receiver_state) = receiver_state
+    let (second_message, receiver_transport) = receiver
         .step_1_with_now_rng(first_message, now, &mut rand::thread_rng())
         .expect("Responder failed second step of handshake");
     let second_message: [u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE] = second_message
-        .get_payload_when_handshaking()
+        .payload()
         .try_into()
         .expect("Handshake remote invlaid message");
 
     #[cfg(feature = "std")]
-    let sender_state = sender_state
+    let sender_transport = sender
         .step_2(second_message)
         .expect("Initiator failed third step of handshake");
     #[cfg(not(feature = "std"))]
@@ -157,19 +152,13 @@ fn main() {
         .unwrap()
         .as_secs() as u32;
     #[cfg(not(feature = "std"))]
-    let sender_state = sender_state
+    let sender_transport = sender
         .step_2_with_now(second_message, now)
         .expect("Initiator failed third step of handshake");
 
-    let mut sender_state = match sender_state {
-        State::Transport(c) => State::with_transport_mode(c),
-        _ => panic!("todo"),
-    };
-
-    let mut receiver_state = match receiver_state {
-        State::Transport(c) => State::with_transport_mode(c),
-        _ => panic!("todo"),
-    };
+    // The handshake is over: each side now holds only the half it needs.
+    let (mut sender_encrypt, _) = sender_transport.split();
+    let (_, mut receiver_decrypt) = receiver_transport.split();
 
     // Create a message
     let nonce = 1337;
@@ -180,14 +169,13 @@ fn main() {
     // This message is intended for the receiver, so set to false
     let channel_msg = false;
 
-    let frame = StandardEitherFrame::<CustomMessage>::Sv2(
+    let frame: Sv2Frame<CustomMessage> =
         Sv2Frame::from_message(msg, msg_type, extension_type, channel_msg)
-            .expect("Failed to create the frame"),
-    );
+            .expect("Failed to create the frame");
 
-    let mut encoder = NoiseEncoder::<CustomMessage>::new();
+    let mut encoder = NoiseEncoder::new();
     let encoded_frame = encoder
-        .encode(frame, &mut sender_state)
+        .encode_transport(frame, &mut sender_encrypt)
         .expect("Failed to encode the frame");
 
     // Send the encoded frame
@@ -196,15 +184,16 @@ fn main() {
         .expect("Failed to send the encoded frame");
 
     // Initialize the decoder
-    let mut decoder = StandardNoiseDecoder::<CustomMessage>::new();
+    let mut decoder = StandardNoiseDecoder::new();
 
     let mut decoded_frame;
 
     // Continuously read the frame from the TCP stream into the decoder buffer until the full
     // message is received.
     //
-    // Note: The length of the payload is defined in a header field. Every call to `next_frame`
-    // will return a `MissingBytes` error, until the full payload is received.
+    // Note: The length of the payload is defined in a header field. Every call to
+    // `next_transport_frame` will return a `MissingBytes` error, until the full payload is
+    // received.
     loop {
         let decoder_buf = decoder.writable();
 
@@ -213,12 +202,9 @@ fn main() {
             .read_exact(decoder_buf)
             .expect("Failed to read the encoded frame header");
 
-        let result = decoder.next_frame(&mut receiver_state);
+        let result = decoder.next_transport_frame(&mut receiver_decrypt);
         match result {
             Ok(frame) => {
-                let frame: StandardSv2Frame<CustomMessage> = frame
-                    .try_into()
-                    .expect("Failed to decode frame into Sv2Frame");
                 decoded_frame = frame;
                 break;
             }
@@ -228,9 +214,7 @@ fn main() {
     }
 
     // Parse the decoded frame header and payload
-    let decoded_frame_header = decoded_frame
-        .get_header()
-        .expect("Failed to get the frame header");
+    let decoded_frame_header = decoded_frame.header();
 
     let decoded_msg: CustomMessage = binary_sv2::from_bytes(decoded_frame.payload())
         .expect("Failed to extract the message from the payload");

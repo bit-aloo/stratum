@@ -15,8 +15,8 @@
 // ```
 
 use binary_sv2::{Deserialize, Serialize};
-use codec_sv2::{Encoder, Error, StandardDecoder, StandardSv2Frame};
-use framing_sv2::framing::Sv2Frame;
+use codec_sv2::{Encoder, Error, StandardDecoder, Sv2Frame};
+use framing_sv2::framing::SerializedSv2Frame;
 use std::{
     convert::TryInto,
     io::{Read, Write},
@@ -80,9 +80,7 @@ fn main() {
     let mut decoded_frame = receiver_side(stream_receiver);
 
     // Parse the decoded frame header and payload
-    let decoded_frame_header = decoded_frame
-        .get_header()
-        .expect("Failed to get the frame header");
+    let decoded_frame_header = decoded_frame.header();
     let decoded_msg: CustomMessage = binary_sv2::from_bytes(decoded_frame.payload())
         .expect("Failed to extract the message from the payload");
 
@@ -99,12 +97,11 @@ fn sender_side(
     channel_msg: bool,
 ) {
     // Create the frame
-    let frame =
-        StandardSv2Frame::<CustomMessage>::from_message(msg, msg_type, extension_type, channel_msg)
-            .expect("Failed to create the frame");
+    let frame = Sv2Frame::<CustomMessage>::from_message(msg, msg_type, extension_type, channel_msg)
+        .expect("Failed to create the frame");
 
     // Encode the frame
-    let mut encoder = Encoder::<CustomMessage>::new();
+    let mut encoder = Encoder::new();
     let encoded_frame = encoder
         .encode(frame.clone())
         .expect("Failed to encode the frame");
@@ -115,9 +112,9 @@ fn sender_side(
         .expect("Failed to send the encoded frame");
 }
 
-fn receiver_side(mut stream_receiver: TcpStream) -> Sv2Frame<CustomMessage, Slice> {
+fn receiver_side(mut stream_receiver: TcpStream) -> SerializedSv2Frame<Slice> {
     // Initialize the decoder
-    let mut decoder = StandardDecoder::<CustomMessage>::new();
+    let mut decoder = StandardDecoder::new();
 
     // Continuously read the frame from the TCP stream into the decoder buffer until the full
     // message is received.

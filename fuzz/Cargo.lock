@@ -196,7 +196,6 @@ dependencies = [
  "framing_sv2",
  "noise_sv2",
  "rand",
- "tracing",
 ]
 
 [[package]]
@@ -250,13 +249,6 @@ name = "derive_codec_sv2"
 version = "2.0.0"
 
 [[package]]
-name = "extensions_sv2"
-version = "0.3.0"
-dependencies = [
- "binary_sv2",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -267,7 +259,6 @@ name = "framing_sv2"
 version = "8.0.0"
 dependencies = [
  "binary_sv2",
- "noise_sv2",
 ]
 
 [[package]]
@@ -283,7 +274,6 @@ dependencies = [
  "libfuzzer-sys",
  "mining_sv2",
  "noise_sv2",
- "parsers_sv2",
  "rand",
  "secp256k1 0.28.2",
  "serde_json",
@@ -423,6 +413,7 @@ dependencies = [
  "chacha20poly1305",
  "rand",
  "secp256k1 0.28.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -436,19 +427,6 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
-name = "parsers_sv2"
-version = "0.6.0"
-dependencies = [
- "binary_sv2",
- "common_messages_sv2",
- "extensions_sv2",
- "framing_sv2",
- "job_declaration_sv2",
- "mining_sv2",
- "template_distribution_sv2",
-]
 
 [[package]]
 name = "pin-project-lite"
