@@ -4,16 +4,12 @@ extern crate alloc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 #[cfg(feature = "noise_sv2")]
-use codec_sv2::{
-    Handshake, NoiseEncoder, StandardNoiseDecoder, TransportDecryptState, TransportEncryptState,
-};
+use codec_sv2::{NoiseEncoder, StandardNoiseDecoder, TransportDecryptState, TransportEncryptState};
 
 #[cfg(feature = "noise_sv2")]
 use framing_sv2::framing::Sv2Frame;
 
 #[cfg(feature = "noise_sv2")]
-use noise_sv2::{Initiator, Responder};
-
 #[cfg(feature = "noise_sv2")]
 mod common;
 #[cfg(feature = "noise_sv2")]
@@ -26,29 +22,9 @@ fn setup_noise_engine_pair() -> (
     TransportEncryptState,
     TransportDecryptState,
 ) {
-    use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
+    let (sender, receiver) = common::make_handshake_pair();
 
-    const AUTHORITY_PUBLIC_K: &str = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72";
-    const AUTHORITY_PRIVATE_K: &str = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n";
-    const CERT_VALIDITY: core::time::Duration = core::time::Duration::from_secs(3600);
-
-    let authority_public_k: Secp256k1PublicKey = AUTHORITY_PUBLIC_K.to_string().try_into().unwrap();
-
-    let authority_private_k: Secp256k1SecretKey =
-        AUTHORITY_PRIVATE_K.to_string().try_into().unwrap();
-
-    let initiator = Initiator::from_raw_k(authority_public_k.into_bytes()).unwrap();
-    let responder = Responder::from_authority_kp(
-        &authority_public_k.into_bytes(),
-        &authority_private_k.into_bytes(),
-        CERT_VALIDITY,
-    )
-    .unwrap();
-
-    let mut sender = Handshake::new(initiator);
-    let receiver = Handshake::new(responder);
-
-    let first_message = sender.step_0().unwrap();
+    let (first_message, sender) = sender.step_0().unwrap();
     let first_message_bytes: [u8; noise_sv2::ELLSWIFT_ENCODING_SIZE] =
         first_message.payload().try_into().unwrap();
 
@@ -145,48 +121,21 @@ fn bench_encrypted_payload_length(c: &mut Criterion) {
 
 #[cfg(feature = "noise_sv2")]
 fn bench_noise_handshake_steps(c: &mut Criterion) {
-    use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
-
-    const AUTHORITY_PUBLIC_K: &str = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72";
-    const AUTHORITY_PRIVATE_K: &str = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n";
-    const CERT_VALIDITY: core::time::Duration = core::time::Duration::from_secs(3600);
-
     c.bench_function("noise/handshake/step_0", |b| {
         b.iter(|| {
-            let authority_public_k: Secp256k1PublicKey =
-                AUTHORITY_PUBLIC_K.to_string().try_into().unwrap();
-
-            let initiator = Initiator::from_raw_k(authority_public_k.into_bytes()).unwrap();
-            let mut sender = Handshake::new(initiator);
-
-            let first_message = sender.step_0().unwrap();
-            black_box(first_message);
+            let (sender, _) = common::make_handshake_pair();
+            black_box(sender.step_0().unwrap());
         })
     });
 
     c.bench_function("noise/handshake/step_1", |b| {
-        let authority_public_k: Secp256k1PublicKey =
-            AUTHORITY_PUBLIC_K.to_string().try_into().unwrap();
-
-        let authority_private_k: Secp256k1SecretKey =
-            AUTHORITY_PRIVATE_K.to_string().try_into().unwrap();
-
-        let initiator = Initiator::from_raw_k(authority_public_k.into_bytes()).unwrap();
-        let mut sender = Handshake::new(initiator);
-
-        let first_message = sender.step_0().unwrap();
+        let (sender, _) = common::make_handshake_pair();
+        let (first_message, _sender) = sender.step_0().unwrap();
         let first_message_bytes: [u8; noise_sv2::ELLSWIFT_ENCODING_SIZE] =
             first_message.payload().try_into().unwrap();
 
         b.iter(|| {
-            let responder = Responder::from_authority_kp(
-                &authority_public_k.into_bytes(),
-                &authority_private_k.into_bytes(),
-                CERT_VALIDITY,
-            )
-            .unwrap();
-
-            let receiver = Handshake::new(responder);
+            let (_, receiver) = common::make_handshake_pair();
             let (second_message, _) = receiver.step_1(first_message_bytes).unwrap();
             black_box(second_message);
         })

@@ -3,7 +3,7 @@ extern crate alloc;
 use binary_sv2;
 use codec_sv2::StandardDecoder;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use framing_sv2::framing::{SerializedSv2Frame, Sv2Frame};
+use framing_sv2::framing::SerializedSv2Frame;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     collections::VecDeque,
@@ -50,13 +50,9 @@ fn read_alloc_counters() -> (u64, u64) {
 }
 
 mod common;
-use common::{OwnedMsg, ZeroCopyMsg, ZeroCopyMsgOwned};
+use common::{OwnedMsg, ZeroCopyMsg};
 
-#[cfg(feature = "with_buffer_pool")]
-type Slice = buffer_sv2::Slice;
-
-#[cfg(not(feature = "with_buffer_pool"))]
-type Slice = Vec<u8>;
+use common::{acquire_frame, make_encoded_frame, Slice};
 
 type DecodedFrame = SerializedSv2Frame<Slice>;
 
@@ -65,33 +61,6 @@ const COINBASE_SIZES: &[usize] = &[16, 64, 256, 1024];
 const DEFAULT_COINBASE: usize = 64;
 
 const POOL_CAPACITY: usize = 8;
-
-fn make_encoded_frame(coinbase_size: usize) -> Vec<u8> {
-    let msg = ZeroCopyMsgOwned::new_owned(1, coinbase_size);
-    let frame = Sv2Frame::<ZeroCopyMsgOwned>::from_message(msg, 0, 0, true).unwrap();
-    let mut buf = vec![0u8; frame.encoded_length()];
-    frame.serialize(&mut buf).unwrap();
-    buf
-}
-
-fn acquire_frame(dec: &mut StandardDecoder, enc_buf: &[u8]) -> DecodedFrame {
-    let w = dec.writable();
-    let header_len = w.len();
-    w.copy_from_slice(&enc_buf[..header_len]);
-    let mut offset = header_len;
-    loop {
-        match dec.next_frame() {
-            Ok(frame) => return frame,
-            Err(codec_sv2::Error::MissingBytes(_)) => {
-                let w = dec.writable();
-                let n = w.len();
-                w.copy_from_slice(&enc_buf[offset..offset + n]);
-                offset += n;
-            }
-            Err(e) => panic!("decode error: {:?}", e),
-        }
-    }
-}
 
 fn bench_deserialization_latency_vs_accumulated(c: &mut Criterion) {
     let enc_buf = make_encoded_frame(DEFAULT_COINBASE);
