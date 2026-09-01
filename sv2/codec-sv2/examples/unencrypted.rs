@@ -77,7 +77,11 @@ fn main() {
     sender_side(stream_sender, msg, msg_type, extension_type, channel_msg);
 
     // Receiver Side
-    let mut decoded_frame = receiver_side(stream_receiver);
+
+    // The decoder owns the buffer the frame points into, so it has to outlive the frame: with the
+    // `with_buffer_pool` feature the pool's `Drop` waits for every slice it handed out.
+    let mut decoder = StandardDecoder::new();
+    let mut decoded_frame = receiver_side(stream_receiver, &mut decoder);
 
     // Parse the decoded frame header and payload
     let decoded_frame_header = decoded_frame.header();
@@ -112,10 +116,10 @@ fn sender_side(
         .expect("Failed to send the encoded frame");
 }
 
-fn receiver_side(mut stream_receiver: TcpStream) -> SerializedSv2Frame<Slice> {
-    // Initialize the decoder
-    let mut decoder = StandardDecoder::new();
-
+fn receiver_side(
+    mut stream_receiver: TcpStream,
+    decoder: &mut StandardDecoder,
+) -> SerializedSv2Frame<Slice> {
     // Continuously read the frame from the TCP stream into the decoder buffer until the full
     // message is received.
     //

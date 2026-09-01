@@ -113,10 +113,10 @@ fn main() {
     )
     .expect("Failed to initialize responder from pub/key pair and/or cert");
 
-    let mut sender = Handshake::new(initiator);
+    let sender = Handshake::new(initiator);
     let receiver = Handshake::new(responder);
 
-    let first_message = sender
+    let (first_message, sender) = sender
         .step_0()
         .expect("Initiator failed first step of handshake");
     let first_message: [u8; ELLSWIFT_ENCODING_SIZE] = first_message
