@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use codec_sv2::StandardDecoder;
+use codec_sv2::Decoder;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use framing_sv2::framing::Sv2Frame;
 
@@ -15,7 +15,7 @@ fn bench_plain_decoder(c: &mut Criterion) {
         let mut enc_buf = vec![0; frame.encoded_length()];
         frame.serialize(&mut enc_buf).unwrap();
 
-        let mut dec = StandardDecoder::new();
+        let mut dec = Decoder::new();
 
         b.iter(|| {
             let w = dec.writable();
@@ -45,7 +45,7 @@ fn bench_plain_decoder(c: &mut Criterion) {
 fn bench_decoder_creation(c: &mut Criterion) {
     c.bench_function("decoder/creation/plain", |b| {
         b.iter(|| {
-            let dec = StandardDecoder::new();
+            let dec = Decoder::new();
             black_box(dec);
         })
     });

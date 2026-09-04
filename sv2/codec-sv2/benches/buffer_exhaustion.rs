@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use codec_sv2::{Encoder, StandardDecoder};
+use codec_sv2::{Decoder, Encoder};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use framing_sv2::framing::Sv2Frame;
 use std::time::{Duration, Instant};
@@ -283,7 +283,7 @@ fn bench_decoder_pool_back_vs_alloc(
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut dec = StandardDecoder::new();
+                let mut dec = Decoder::new();
                 let w = dec.writable();
                 let len = w.len();
                 w.copy_from_slice(&enc_buf[..len]);
@@ -314,7 +314,7 @@ fn bench_decoder_pool_back_vs_alloc(
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let mut dec = StandardDecoder::new();
+                let mut dec = Decoder::new();
                 let mut held = Vec::with_capacity(9);
 
                 for _ in 0..8 {
@@ -379,7 +379,7 @@ fn bench_decoder_per_slot_latency(c: &mut Criterion, group_name: &str, enc_buf: 
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let mut dec = StandardDecoder::new();
+                        let mut dec = Decoder::new();
                         let mut pre = Vec::with_capacity(held + 1);
 
                         for _ in 0..held {

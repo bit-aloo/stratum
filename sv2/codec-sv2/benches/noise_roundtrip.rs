@@ -4,7 +4,7 @@ extern crate alloc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 #[cfg(feature = "noise_sv2")]
-use codec_sv2::{NoiseEncoder, StandardNoiseDecoder, TransportDecryptState, TransportEncryptState};
+use codec_sv2::{NoiseDecoder, NoiseEncoder, TransportDecryptState, TransportEncryptState};
 
 #[cfg(feature = "noise_sv2")]
 use framing_sv2::framing::Sv2Frame;
@@ -18,7 +18,7 @@ use common::TestMsg;
 #[cfg(feature = "noise_sv2")]
 fn setup_noise_engine_pair() -> (
     NoiseEncoder,
-    StandardNoiseDecoder,
+    NoiseDecoder,
     TransportEncryptState,
     TransportDecryptState,
 ) {
@@ -35,7 +35,7 @@ fn setup_noise_engine_pair() -> (
     let sender_transport = sender.step_2(second_message_bytes).unwrap();
 
     let enc = NoiseEncoder::new();
-    let dec = StandardNoiseDecoder::new();
+    let dec = NoiseDecoder::new();
 
     let (sender_encrypt, _) = sender_transport.split();
     let (_, receiver_decrypt) = receiver_transport.split();
@@ -58,7 +58,7 @@ fn bench_noise_roundtrip(c: &mut Criterion) {
                 .unwrap();
 
             // Decode
-            let mut dec = StandardNoiseDecoder::new();
+            let mut dec = NoiseDecoder::new();
             let w = dec.writable();
             let len = w.len();
             w[..len].copy_from_slice(&encrypted[0..len]);

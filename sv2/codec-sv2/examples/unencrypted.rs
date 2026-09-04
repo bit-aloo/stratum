@@ -15,7 +15,7 @@
 // ```
 
 use binary_sv2::{Deserialize, Serialize};
-use codec_sv2::{Encoder, Error, StandardDecoder, Sv2Frame};
+use codec_sv2::{Decoder, Encoder, Error, Sv2Frame};
 use framing_sv2::framing::SerializedSv2Frame;
 use std::{
     convert::TryInto,
@@ -80,7 +80,7 @@ fn main() {
 
     // The decoder owns the buffer the frame points into, so it has to outlive the frame: with the
     // `with_buffer_pool` feature the pool's `Drop` waits for every slice it handed out.
-    let mut decoder = StandardDecoder::new();
+    let mut decoder = Decoder::new();
     let mut decoded_frame = receiver_side(stream_receiver, &mut decoder);
 
     // Parse the decoded frame header and payload
@@ -118,7 +118,7 @@ fn sender_side(
 
 fn receiver_side(
     mut stream_receiver: TcpStream,
-    decoder: &mut StandardDecoder,
+    decoder: &mut Decoder,
 ) -> SerializedSv2Frame<Slice> {
     // Continuously read the frame from the TCP stream into the decoder buffer until the full
     // message is received.

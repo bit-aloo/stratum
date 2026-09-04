@@ -18,7 +18,7 @@
 
 use binary_sv2::{Deserialize, Serialize};
 #[cfg(feature = "noise_sv2")]
-use codec_sv2::{Error, Handshake, NoiseEncoder, StandardNoiseDecoder, Sv2Frame};
+use codec_sv2::{Error, Handshake, NoiseDecoder, NoiseEncoder, Sv2Frame};
 #[cfg(feature = "noise_sv2")]
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 #[cfg(feature = "noise_sv2")]
@@ -113,8 +113,8 @@ fn main() {
     )
     .expect("Failed to initialize responder from pub/key pair and/or cert");
 
-    let sender = Handshake::new(initiator);
-    let receiver = Handshake::new(responder);
+    let sender = Handshake::initiator(initiator);
+    let receiver = Handshake::responder(responder);
 
     let (first_message, sender) = sender
         .step_0()
@@ -184,7 +184,7 @@ fn main() {
         .expect("Failed to send the encoded frame");
 
     // Initialize the decoder
-    let mut decoder = StandardNoiseDecoder::new();
+    let mut decoder = NoiseDecoder::new();
 
     let mut decoded_frame;
 

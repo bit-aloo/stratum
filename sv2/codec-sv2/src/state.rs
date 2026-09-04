@@ -28,26 +28,11 @@ use noise_sv2::{
     INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE,
 };
 
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for noise_sv2::Initiator {}
-    impl Sealed for noise_sv2::Responder {}
-    impl Sealed for super::InitiatorSent {}
-}
-
-/// The role a [`Handshake`] plays: [`Initiator`] before it has sent its first message,
-/// [`InitiatorSent`] after, or [`Responder`]. Sealed: those are the only roles.
-pub trait HandshakeRole: sealed::Sealed {}
-
-impl HandshakeRole for Initiator {}
-impl HandshakeRole for InitiatorSent {}
-impl HandshakeRole for Responder {}
-
 /// A handshake role that is waiting on a message from its counterpart.
 ///
 /// An [`Initiator`] that has not sent its first message yet is deliberately not one: nothing is
 /// coming back until it does, so a decoder cannot be asked to read for it.
-pub trait ExpectsHandshakeMessage: HandshakeRole {
+pub trait ExpectsHandshakeMessage {
     /// Size of the handshake message this role is waiting for.
     const EXPECTED_MESSAGE_SIZE: usize;
 }
@@ -67,8 +52,9 @@ impl ExpectsHandshakeMessage for Responder {
 #[derive(Debug)]
 pub struct InitiatorSent(Initiator);
 
-/// The codec state while the handshake runs, in the role `R`. Frames exchanged in this state are
-/// not encrypted yet.
+/// The codec state while the handshake runs, in the role `R`: [`Initiator`] before it has sent
+/// its first message, [`InitiatorSent`] after, or [`Responder`]. Frames exchanged in this state
+/// are not encrypted yet.
 ///
 /// A step belonging to the other role does not exist:
 ///
@@ -123,18 +109,16 @@ pub struct InitiatorSent(Initiator);
 ///     initiator().step_2_with_now([0; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE], 0);
 /// ```
 #[derive(Debug)]
-pub struct Handshake<R: HandshakeRole> {
+pub struct Handshake<R> {
     role: Box<R>,
 }
 
-impl<R: HandshakeRole> Handshake<R> {
-    /// Starts a handshake in the role `R`.
-    pub fn new(role: Box<R>) -> Self {
+impl Handshake<Initiator> {
+    /// Starts a handshake as the initiator.
+    pub fn initiator(role: Box<Initiator>) -> Self {
         Self { role }
     }
-}
 
-impl Handshake<Initiator> {
     /// Creates the initial handshake message, consuming the state.
     ///
     /// The returned [`Handshake<InitiatorSent>`] is what takes the responder's reply, in
@@ -183,6 +167,11 @@ impl Handshake<InitiatorSent> {
 }
 
 impl Handshake<Responder> {
+    /// Starts a handshake as the responder.
+    pub fn responder(role: Box<Responder>) -> Self {
+        Self { role }
+    }
+
     /// Answers the initiator's public key, completing the handshake on this side and consuming
     /// the state. The returned frame is what the initiator needs for its [`Handshake::step_2`].
     #[cfg(feature = "std")]

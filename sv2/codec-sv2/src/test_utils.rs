@@ -4,8 +4,8 @@
 //! modules at once; the authority keys below were spelled out in six places.
 
 use crate::{
-    decoder::StandardNoiseDecoder, state::Handshake, Buffer, SerializedSv2Frame,
-    TransportDecryptState, TransportEncryptState,
+    decoder::NoiseDecoder, state::Handshake, Buffer, SerializedSv2Frame, TransportDecryptState,
+    TransportEncryptState,
 };
 use buffer_sv2::Buffer as IsBuffer;
 use core::time::Duration;
@@ -28,8 +28,8 @@ pub(crate) fn make_handshake_pair() -> (Handshake<Initiator>, Handshake<Responde
     let priv_k_bytes = priv_k.into_bytes();
 
     (
-        Handshake::new(Initiator::from_raw_k(pub_k_bytes).unwrap()),
-        Handshake::new(
+        Handshake::initiator(Initiator::from_raw_k(pub_k_bytes).unwrap()),
+        Handshake::responder(
             Responder::from_authority_kp(&pub_k_bytes, &priv_k_bytes, CERT_VALIDITY).unwrap(),
         ),
     )
@@ -65,7 +65,7 @@ pub(crate) fn make_transport_state_pair() -> (TransportEncryptState, TransportDe
 
 /// Feeds `encoded` into `decoder` a read window at a time until it yields a frame.
 pub(crate) fn decode_noise_frame(
-    decoder: &mut StandardNoiseDecoder,
+    decoder: &mut NoiseDecoder,
     state: &mut TransportDecryptState,
     encoded: &[u8],
 ) -> Option<SerializedSv2Frame<Slice>> {

@@ -71,7 +71,10 @@ mod noise {
         )
         .unwrap();
 
-        (Handshake::new(initiator), Handshake::new(responder))
+        (
+            Handshake::initiator(initiator),
+            Handshake::responder(responder),
+        )
     }
 
     pub fn make_transport_state_pair() -> (TransportEncryptState, TransportDecryptState) {
@@ -117,7 +120,7 @@ pub fn make_encoded_frame(coinbase_size: usize) -> Vec<u8> {
 /// Feeds `enc_buf` into `dec` a read window at a time until it yields a frame.
 #[allow(dead_code)]
 pub fn acquire_frame(
-    dec: &mut codec_sv2::StandardDecoder,
+    dec: &mut codec_sv2::Decoder,
     enc_buf: &[u8],
 ) -> framing_sv2::framing::SerializedSv2Frame<Slice> {
     let w = dec.writable();

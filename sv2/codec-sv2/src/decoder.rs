@@ -9,10 +9,9 @@
 //! ## Usage
 //! All messages passed between Sv2 roles are encoded as Sv2 frames. These frames are decoded using
 //! primitives in this module. There are two types of decoders for reading these frames: one for
-//! regular Sv2 frames [`StandardDecoder`], and another for Noise-encrypted frames
-//! `StandardNoiseDecoder` (under the `noise_sv2` feature). Both decoders manage the
-//! deserialization of incoming data and, when applicable, the decryption of the data upon
-//! receiving the transmitted message.
+//! regular Sv2 frames [`Decoder`], and another for Noise-encrypted frames `NoiseDecoder` (under
+//! the `noise_sv2` feature). Both decoders manage the deserialization of incoming data and, when
+//! applicable, the decryption of the data upon receiving the transmitted message.
 //!
 //! ### Buffer Management
 //!
@@ -44,16 +43,16 @@ use crate::{
     state::ExpectsHandshakeMessage, TransportDecryptState, ENCRYPTED_SV2_FRAME_HEADER_SIZE,
 };
 
-/// Standard Sv2 decoder with Noise protocol support.
+/// Sv2 decoder with Noise protocol support.
 ///
 /// Used for decoding Sv2 frames encrypted via the Noise protocol.
 #[cfg(feature = "noise_sv2")]
-pub type StandardNoiseDecoder = WithNoise<Buffer>;
+pub type NoiseDecoder = WithNoise<Buffer>;
 
-/// Standard Sv2 decoder without Noise protocol support.
+/// Sv2 decoder without Noise protocol support.
 ///
 /// Used for decoding plain Sv2 frames.
-pub type StandardDecoder = WithoutNoise<Buffer>;
+pub type Decoder = WithoutNoise<Buffer>;
 
 /// Decoder for Sv2 frames with Noise protocol support.
 ///
@@ -76,6 +75,10 @@ pub struct WithNoise<B: IsBuffer> {
     // Stores the decrypted data until it is ready to be processed and converted into a Sv2 frame.
     sv2_buffer: B,
 
+    // Number of encrypted bytes still missing before the current frame can progress.
+    //
+    // Set from the header once it is decrypted, and to the size of the next expected message
+    // or header otherwise; [`Self::writable_len`] caps it at one chunk.
     missing_noise_b: usize,
 }
 
@@ -98,10 +101,10 @@ impl<B: IsBuffer + AeadBuffer> WithNoise<B> {
     /// in the [`noise_sv2::Initiator`] role has sent nothing yet, so nothing is coming back:
     ///
     /// ```compile_fail,E0277
-    /// use codec_sv2::StandardNoiseDecoder;
+    /// use codec_sv2::NoiseDecoder;
     /// use noise_sv2::Initiator;
     ///
-    /// let mut decoder = StandardNoiseDecoder::new();
+    /// let mut decoder = NoiseDecoder::new();
     /// let _ = decoder.next_handshake_frame::<Initiator>();
     /// ```
     #[inline]
@@ -425,7 +428,7 @@ mod tests {
 
     #[test]
     fn unencrypted_writable_with_missing_b_initialized_as_header_size() {
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         let actual = decoder.writable();
         let expect = [0u8; Header::SIZE];
         assert_eq!(actual, expect);
@@ -437,14 +440,14 @@ mod tests {
         use crate::{ExpectsHandshakeMessage, InitiatorSent};
         use noise_sv2::Responder;
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         assert!(matches!(
             decoder.next_handshake_frame::<Responder>(),
             Err(Error::MissingBytes(n)) if n == Responder::EXPECTED_MESSAGE_SIZE
         ));
         assert_eq!(decoder.writable_len(), Responder::EXPECTED_MESSAGE_SIZE);
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         assert!(matches!(
             decoder.next_handshake_frame::<InitiatorSent>(),
             Err(Error::MissingBytes(n)) if n == InitiatorSent::EXPECTED_MESSAGE_SIZE
@@ -454,9 +457,9 @@ mod tests {
 
 #[cfg(test)]
 mod prop_tests {
-    use crate::{decoder::Buffer, encoder::Encoder, StandardDecoder};
+    use crate::{decoder::Buffer, encoder::Encoder, Decoder};
     #[cfg(feature = "noise_sv2")]
-    use crate::{NoiseEncoder, StandardNoiseDecoder};
+    use crate::{NoiseDecoder, NoiseEncoder};
     use binary_sv2::{Deserialize, Serialize};
     use buffer_sv2::Buffer as IsBuffer;
     use framing_sv2::{
@@ -492,7 +495,7 @@ mod prop_tests {
     }
 
     fn decode_frame(
-        decoder: &mut StandardDecoder,
+        decoder: &mut Decoder,
         encoded_bytes: &[u8],
         chunk_size: Option<usize>,
     ) -> Option<SerializedSv2Frame<Slice>> {
@@ -535,7 +538,7 @@ mod prop_tests {
             Err(_) => return TestResult::failed(),
         };
 
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         match decode_frame(&mut decoder, encoded.as_ref(), None) {
             Some(mut decoded_frame) => {
                 let header = decoded_frame.header();
@@ -579,7 +582,7 @@ mod prop_tests {
             Err(_) => return TestResult::failed(),
         };
 
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         let encoded_bytes: &[u8] = encoded.as_ref();
         let chunk_size = (chunk_size as usize).max(1);
 
@@ -617,7 +620,7 @@ mod prop_tests {
         let encoded = encoder.encode(frame).unwrap();
         let encoded: &[u8] = encoded.as_ref();
 
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         decoder.writable().copy_from_slice(&encoded[..Header::SIZE]);
         assert!(matches!(
             decoder.next_frame(),
@@ -655,7 +658,7 @@ mod prop_tests {
         const MSG_LEN: usize = ELLSWIFT_ENCODING_SIZE;
 
         // Handshake state.
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         assert!(matches!(
             decoder.next_handshake_frame::<Responder>(),
             Err(crate::Error::MissingBytes(MSG_LEN))
@@ -675,7 +678,7 @@ mod prop_tests {
 
         // Transport state, before the encrypted header has been decrypted.
         let (_, mut receiver) = make_transport_state_pair();
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         assert!(matches!(
             decoder.next_transport_frame(&mut receiver),
             Err(crate::Error::MissingBytes(_))
@@ -698,7 +701,7 @@ mod prop_tests {
         let encrypted = encoder.encode_transport(sv2_frame, &mut sender).unwrap();
         let encrypted: &[u8] = encrypted.as_ref();
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         let mut offset = 0;
         let w = decoder.writable();
         let n = w.len().min(encrypted.len() - offset);
@@ -733,7 +736,7 @@ mod prop_tests {
 
         let (initiator, _responder) = make_handshake_pair();
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         assert_ne!(decoder.writable_len(), 0, "a fresh decoder");
 
         let mut first = initiator.step_0().unwrap().0.payload().to_vec();
@@ -762,7 +765,7 @@ mod prop_tests {
     fn the_first_transport_frame_reads_its_header_in_one_round() {
         use crate::ENCRYPTED_SV2_FRAME_HEADER_SIZE;
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
 
         let initiator_first = {
             let (initiator, _) = make_handshake_pair();
@@ -830,7 +833,7 @@ mod prop_tests {
         let second_chunk = ENCRYPTED_SV2_FRAME_HEADER_SIZE + SV2_FRAME_CHUNK_SIZE + 8;
         encrypted[second_chunk] ^= 0x01;
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         let mut offset = 0;
         loop {
             match decoder.next_transport_frame(&mut receiver) {
@@ -858,7 +861,7 @@ mod prop_tests {
     /// size its read window from that declaration: six bytes would otherwise reserve 16 MiB.
     #[test]
     fn a_declared_frame_length_does_not_widen_the_read_window() {
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         decoder
             .writable()
             .copy_from_slice(&[0, 0, 0, 0xff, 0xff, 0xff]);
@@ -881,7 +884,7 @@ mod prop_tests {
         encoded[2] = 1;
         encoded[3..Header::SIZE].copy_from_slice(&(PAYLOAD as u32).to_le_bytes()[..3]);
 
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         let mut offset = 0;
         loop {
             let missing = match decoder.next_frame() {
@@ -910,7 +913,7 @@ mod prop_tests {
             *byte = i as u8;
         }
 
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
         let mut offset = 0;
         let mut rounds = 0;
         let frame = loop {
@@ -949,7 +952,7 @@ mod prop_tests {
         sender.encrypt(&mut header).unwrap();
         let header = header.get_data_owned();
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         assert!(matches!(
             decoder.next_transport_frame(&mut receiver),
             Err(crate::Error::MissingBytes(ENCRYPTED_SV2_FRAME_HEADER_SIZE))
@@ -984,7 +987,7 @@ mod prop_tests {
         let encrypted = encoder.encode_transport(frame, &mut sender).unwrap();
         let encrypted: &[u8] = encrypted.as_ref();
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         let mut offset = 0;
         let mut rounds = 0;
         let decoded = loop {
@@ -1033,7 +1036,7 @@ mod prop_tests {
             Err(_) => return TestResult::failed(),
         };
 
-        let mut decoder = StandardDecoder::new();
+        let mut decoder = Decoder::new();
 
         let decoded_msg1 = match decode_frame(&mut decoder, encoded1.as_ref(), None) {
             Some(mut f) => match binary_sv2::from_bytes::<TestMessage>(f.payload()) {
@@ -1078,7 +1081,7 @@ mod prop_tests {
             Err(_) => return TestResult::failed(),
         };
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         let encrypted_bytes: &[u8] = encrypted.as_ref();
         match decode_noise_frame(&mut decoder, &mut receiver_state, encrypted_bytes) {
             Some(mut decoded) => {
@@ -1097,7 +1100,7 @@ mod prop_tests {
         }
     }
 
-    /// Verifies that `StandardNoiseDecoder` correctly handles data arriving in multiple rounds —
+    /// Verifies that `NoiseDecoder` correctly handles data arriving in multiple rounds —
     /// one round per encrypted segment (header, then payload) — emitting `MissingBytes`
     /// between rounds before returning the fully decrypted frame.
     #[cfg(feature = "noise_sv2")]
@@ -1115,7 +1118,7 @@ mod prop_tests {
             Err(_) => return TestResult::failed(),
         };
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         let encoded_bytes: &[u8] = encrypted.as_ref();
         let mut offset = 0;
         let mut missing_bytes_count = 0;
@@ -1149,7 +1152,7 @@ mod prop_tests {
         let encrypted = encoder.encode_transport(frame, &mut sender_state).unwrap();
         let encrypted: &[u8] = encrypted.as_ref();
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
 
         // Fail on the encrypted header. The closure never touches `receiver_state`, so its nonce
         // stays where it was and the same bytes can be replayed below.
@@ -1178,7 +1181,7 @@ mod prop_tests {
         }
     }
 
-    /// Verifies that a single `StandardNoiseDecoder` instance correctly
+    /// Verifies that a single `NoiseDecoder` instance correctly
     /// decodes two consecutive noise-encrypted frames in sequence using
     /// the same shared transport state.
     #[cfg(feature = "noise_sv2")]
@@ -1210,7 +1213,7 @@ mod prop_tests {
             Err(_) => return TestResult::failed(),
         };
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
 
         let decoded_msg1 =
             match decode_noise_frame(&mut decoder, &mut receiver_state, enc1.as_ref()) {

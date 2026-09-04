@@ -42,7 +42,7 @@ With `noise_sv2` feature:
 ### 2. Decoder (`decoder.rs`)
 
 - **`decoder/plain`** — Full decode loop: fill writable buffer, call `next_frame()` until complete
-- **`decoder/creation/plain`** — `StandardDecoder::new()` overhead
+- **`decoder/creation/plain`** — `Decoder::new()` overhead
 
 ### 3. Noise Roundtrip (`noise_roundtrip.rs`)
 

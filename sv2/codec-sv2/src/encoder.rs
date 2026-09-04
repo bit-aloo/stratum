@@ -430,7 +430,7 @@ mod prop_tests {
             Sv2Frame::<TestMessage>::from_message(TestMessage { value: 2 }, 0, 0, false).unwrap();
         let encrypted = encoder.encode_transport(next, &mut sender_enc).unwrap();
 
-        let mut decoder = crate::StandardNoiseDecoder::new();
+        let mut decoder = crate::NoiseDecoder::new();
         let mut decoded = decode_noise_frame(&mut decoder, &mut receiver_dec, encrypted.as_ref())
             .expect("failed to decode the frame after a failed encode");
         assert_eq!(

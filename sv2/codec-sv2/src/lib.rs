@@ -11,7 +11,7 @@
 //! ## Usage
 //! Encode with the [`Encoder`], or the `NoiseEncoder` under the `noise_sv2` feature.
 //!
-//! Decode with the [`StandardDecoder`], or the `StandardNoiseDecoder` under the same feature.
+//! Decode with the [`Decoder`], or the `NoiseDecoder` under the same feature.
 //!
 //! The `state` module gives each phase of a Noise connection its own type.
 //!
@@ -55,9 +55,9 @@ pub use error::{Error, Result};
 
 pub use framing_sv2::framing::{EncodableFrame, SerializedSv2Frame, Sv2Frame};
 
-pub use decoder::StandardDecoder;
+pub use decoder::Decoder;
 #[cfg(feature = "noise_sv2")]
-pub use decoder::StandardNoiseDecoder;
+pub use decoder::NoiseDecoder;
 
 pub use encoder::Encoder;
 #[cfg(feature = "noise_sv2")]
@@ -65,8 +65,8 @@ pub use encoder::NoiseEncoder;
 
 #[cfg(feature = "noise_sv2")]
 pub use state::{
-    ExpectsHandshakeMessage, Handshake, HandshakeRole, InitiatorSent, Transport,
-    TransportDecryptState, TransportEncryptState,
+    ExpectsHandshakeMessage, Handshake, InitiatorSent, Transport, TransportDecryptState,
+    TransportEncryptState,
 };
 
 #[cfg(not(feature = "with_buffer_pool"))]
@@ -101,7 +101,7 @@ pub type StandardSerializedFrame = SerializedSv2Frame<<Buffer as IsBuffer>::Slic
 mod tests {
     use crate::{
         test_utils::{decode_noise_frame, make_handshake_pair, transport_halves},
-        Error, InitiatorSent, NoiseEncoder, StandardNoiseDecoder, TransportDecryptState,
+        Error, InitiatorSent, NoiseDecoder, NoiseEncoder, TransportDecryptState,
         TransportEncryptState, SV2_FRAME_PLAINTEXT_CHUNK_SIZE,
     };
     use binary_sv2::{Deserialize, Serialize, B064K};
@@ -127,7 +127,7 @@ mod tests {
 
     fn round_trip(
         encoder: &mut NoiseEncoder,
-        decoder: &mut StandardNoiseDecoder,
+        decoder: &mut NoiseDecoder,
         enc: &mut TransportEncryptState,
         dec: &mut TransportDecryptState,
         nonce: u16,
@@ -148,8 +148,8 @@ mod tests {
             transport_halves();
         let mut encoder = NoiseEncoder::new();
 
-        let mut to_responder = StandardNoiseDecoder::new();
-        let mut to_initiator = StandardNoiseDecoder::new();
+        let mut to_responder = NoiseDecoder::new();
+        let mut to_initiator = NoiseDecoder::new();
 
         for nonce in 0..8u16 {
             assert_eq!(
@@ -189,7 +189,7 @@ mod tests {
         let mut encoder = NoiseEncoder::new();
         let encrypted = encoder.encode_transport(frame, &mut initiator_enc).unwrap();
 
-        let mut decoder = StandardNoiseDecoder::new();
+        let mut decoder = NoiseDecoder::new();
         let mut frame = decode_noise_frame(&mut decoder, &mut responder_dec, encrypted.as_ref())
             .expect("failed to decode a chunked transport frame");
         assert_eq!(frame.header().msg_type(), MSG_TYPE);
@@ -203,8 +203,8 @@ mod tests {
         let (initiator, responder) = make_handshake_pair();
 
         let mut encoder = NoiseEncoder::new();
-        let mut to_responder = StandardNoiseDecoder::new();
-        let mut to_initiator = StandardNoiseDecoder::new();
+        let mut to_responder = NoiseDecoder::new();
+        let mut to_initiator = NoiseDecoder::new();
 
         let (first, initiator) = initiator.step_0().unwrap();
         let first = encoder.encode_handshake(first);
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(
             round_trip(
                 &mut encoder,
-                &mut StandardNoiseDecoder::new(),
+                &mut NoiseDecoder::new(),
                 &mut initiator_enc,
                 &mut responder_dec,
                 7
@@ -238,7 +238,7 @@ mod tests {
     }
 
     fn read_handshake_frame<R: crate::ExpectsHandshakeMessage>(
-        decoder: &mut StandardNoiseDecoder,
+        decoder: &mut NoiseDecoder,
         encoded: &[u8],
     ) -> framing_sv2::framing::HandshakeFrame {
         let mut offset = 0;
