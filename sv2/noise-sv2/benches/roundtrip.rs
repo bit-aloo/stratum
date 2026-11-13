@@ -1,13 +1,16 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use noise_sv2::{Initiator, Responder};
+use noise_sv2::{Initiator, InitiatorAuthentication, Responder, ResponderIdentity};
 
 use crate::common::{generate_key_with_rng, payload, rng};
 mod common;
 
 fn bench_encryption_roundtrip(c: &mut Criterion) {
     let responder_key = generate_key_with_rng(&mut rng());
-    let mut initiator = Initiator::new(None);
-    let mut responder = Responder::new(responder_key, 10);
+    let mut initiator = Initiator::new(InitiatorAuthentication::Unauthenticated);
+    let mut responder = Responder::new(&ResponderIdentity::Authority {
+        authority: responder_key,
+        certificate_validity: 10,
+    });
 
     let msg_0 = initiator.step_0().unwrap();
     let (msg_2, mut responder_transport) = responder.step_1(msg_0).unwrap();

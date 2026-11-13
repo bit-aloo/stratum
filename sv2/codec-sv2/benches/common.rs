@@ -52,7 +52,8 @@ mod noise {
     use codec_sv2::{Handshake, TransportDecryptState, TransportEncryptState};
     use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
     use noise_sv2::{
-        Initiator, Responder, ELLSWIFT_ENCODING_SIZE, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE,
+        Initiator, InitiatorAuthentication, Responder, ResponderIdentity, ELLSWIFT_ENCODING_SIZE,
+        INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE,
     };
 
     const AUTHORITY_PUBLIC_K: &str = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72";
@@ -63,13 +64,15 @@ mod noise {
         let public_k: Secp256k1PublicKey = AUTHORITY_PUBLIC_K.to_string().try_into().unwrap();
         let private_k: Secp256k1SecretKey = AUTHORITY_PRIVATE_K.to_string().try_into().unwrap();
 
-        let initiator = Initiator::from_raw_k(public_k.into_bytes()).unwrap();
-        let responder = Responder::from_authority_kp(
+        let initiator =
+            Initiator::new(InitiatorAuthentication::from_raw_k(public_k.into_bytes()).unwrap());
+        let identity = ResponderIdentity::from_authority_kp(
             &public_k.into_bytes(),
             &private_k.into_bytes(),
             CERT_VALIDITY,
         )
         .unwrap();
+        let responder = Responder::new(&identity);
 
         (
             Handshake::initiator(initiator),

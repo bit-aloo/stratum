@@ -22,7 +22,7 @@ use codec_sv2::{Decrypted, Handshake, MessageFrame, NoiseDecoder, NoiseEncoder};
 #[cfg(feature = "noise_sv2")]
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 #[cfg(feature = "noise_sv2")]
-use noise_sv2::{Initiator, Responder};
+use noise_sv2::{Initiator, InitiatorAuthentication, Responder, ResponderIdentity};
 
 #[cfg(feature = "noise_sv2")]
 use noise_sv2::{ELLSWIFT_ENCODING_SIZE, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE};
@@ -89,29 +89,16 @@ fn main() {
         .try_into()
         .expect("Failed to convert receiver private key to Secp256k1PublicKey");
 
-    #[cfg(feature = "std")]
-    let initiator = Initiator::from_raw_k(authority_public_k.into_bytes())
-        .expect("Failed to create initiator role from raw pub key");
-    #[cfg(not(feature = "std"))]
-    let initiator =
-        Initiator::from_raw_k_with_rng(authority_public_k.into_bytes(), &mut rand::thread_rng())
-            .expect("Failed to create initiator role from raw pub key");
-
-    #[cfg(feature = "std")]
-    let responder = Responder::from_authority_kp(
+    let authentication = InitiatorAuthentication::from_raw_k(authority_public_k.into_bytes())
+        .expect("Failed to parse authority public key");
+    let identity = ResponderIdentity::from_authority_kp(
         &authority_public_k.into_bytes(),
         &authority_private_k.into_bytes(),
         CERT_VALIDITY,
     )
-    .expect("Failed to initialize responder from pub/key pair and/or cert");
-    #[cfg(not(feature = "std"))]
-    let responder = Responder::from_authority_kp_with_rng(
-        &authority_public_k.into_bytes(),
-        &authority_private_k.into_bytes(),
-        CERT_VALIDITY,
-        &mut rand::thread_rng(),
-    )
-    .expect("Failed to initialize responder from pub/key pair and/or cert");
+    .expect("Failed to initialize authority identity");
+    let initiator = Initiator::new_with_rng(authentication, &mut rand::thread_rng());
+    let responder = Responder::new_with_rng(&identity, &mut rand::thread_rng());
 
     let sender = Handshake::initiator(initiator);
     let receiver = Handshake::responder(responder);

@@ -16,7 +16,7 @@
 // cargo run --example handshake
 // ```
 
-use noise_sv2::{Initiator, Responder};
+use noise_sv2::{Initiator, InitiatorAuthentication, Responder, ResponderIdentity};
 use secp256k1::{Keypair, Parity, Secp256k1};
 
 // Even parity used in the Schnorr signature process
@@ -42,20 +42,22 @@ fn main() {
     let responder_key_pair = generate_key();
 
     #[cfg(feature = "std")]
-    let mut initiator = Initiator::new(Some(responder_key_pair.public_key().into()));
+    let mut initiator = Initiator::new(InitiatorAuthentication::Authority(
+        responder_key_pair.public_key().into(),
+    ));
     #[cfg(not(feature = "std"))]
     let mut initiator = Initiator::new_with_rng(
-        Some(responder_key_pair.public_key().into()),
+        InitiatorAuthentication::Authority(responder_key_pair.public_key().into()),
         &mut rand::thread_rng(),
     );
+    let identity = ResponderIdentity::Authority {
+        authority: responder_key_pair,
+        certificate_validity: RESPONDER_CERT_VALIDITY,
+    };
     #[cfg(feature = "std")]
-    let mut responder = Responder::new(responder_key_pair, RESPONDER_CERT_VALIDITY);
+    let mut responder = Responder::new(&identity);
     #[cfg(not(feature = "std"))]
-    let mut responder = Responder::new_with_rng(
-        responder_key_pair,
-        RESPONDER_CERT_VALIDITY,
-        &mut rand::thread_rng(),
-    );
+    let mut responder = Responder::new_with_rng(&identity, &mut rand::thread_rng());
 
     let first_message = initiator
         .step_0()

@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use chacha20poly1305::aead::Error as AeadError;
 
-use crate::signature_message::SignatureNoiseMessage;
+use crate::Certificate;
 
 /// Noise protocol error handling.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,7 +33,10 @@ pub enum Error {
     InvalidCipherState,
 
     /// Provided certificate is invalid or cannot be verified.
-    InvalidCertificate(SignatureNoiseMessage),
+    InvalidCertificate(Certificate),
+
+    /// A certificate lifetime exceeds the wire format's `u32` seconds.
+    InvalidCertificateValidity,
 
     /// A raw public key is invalid or cannot be parsed.
     InvalidRawPublicKey,

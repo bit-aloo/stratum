@@ -1,103 +1,198 @@
-use crate::{handshake::HandshakeOp, initiator::Initiator, responder::Responder};
+use crate::{
+    Certificate, CertifiedStaticKey, Error, Initiator, InitiatorAuthentication, NoiseEngine,
+    Responder, ResponderIdentity, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE,
+};
+use rand::{rngs::StdRng, SeedableRng};
+use secp256k1::{Keypair, Secp256k1};
 
-#[test]
-#[cfg(feature = "std")]
-#[cfg_attr(miri, ignore)]
-fn test_1() {
-    let key_pair = Responder::generate_key();
+fn key(rng: &mut StdRng) -> Keypair {
+    Keypair::new(&Secp256k1::new(), rng)
+}
 
-    let mut initiator = Initiator::new(Some(key_pair.public_key().into()));
-    let mut responder = Responder::new(key_pair, 31449600);
-    let first_message = initiator.step_0().unwrap();
-    let (second_message, mut responder_engine) = responder.step_1(first_message).unwrap();
-    let mut initiator_engine = initiator.step_2(second_message).unwrap();
-    let mut message = "ciao".as_bytes().to_vec();
-    initiator_engine.encrypt(&mut message).unwrap();
-    assert!(message != "ciao".as_bytes().to_vec());
-    responder_engine.decrypt(&mut message).unwrap();
+fn handshake(
+    identity: &ResponderIdentity,
+    authentication: InitiatorAuthentication,
+    now: u32,
+    rng: &mut StdRng,
+) -> Result<
+    (
+        NoiseEngine,
+        NoiseEngine,
+        [u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE],
+    ),
+    Error,
+> {
+    let mut initiator = Initiator::new_with_rng(authentication, rng);
+    let mut responder = Responder::new_with_rng(identity, rng);
+    let first = initiator.step_0()?;
+    let (second, responder_engine) = responder.step_1_with_now_rng(first, now, rng)?;
+    let initiator_engine = initiator.step_2_with_now(second, now)?;
+    Ok((initiator_engine, responder_engine, second))
+}
 
-    assert!(message == "ciao".as_bytes().to_vec());
+fn round_trip(initiator: &mut NoiseEngine, responder: &mut NoiseEngine) {
+    let mut message = b"initiator to responder".to_vec();
+    initiator.encrypt(&mut message).unwrap();
+    responder.decrypt(&mut message).unwrap();
+    assert_eq!(message, b"initiator to responder");
+    let mut message = b"responder to initiator".to_vec();
+    responder.encrypt(&mut message).unwrap();
+    initiator.decrypt(&mut message).unwrap();
+    assert_eq!(message, b"responder to initiator");
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn test_1_with_rng() {
-    let key_pair = Responder::generate_key_with_rng(&mut rand::thread_rng());
+fn all_identity_and_authentication_combinations() {
+    let mut rng = StdRng::seed_from_u64(42);
+    let authority = key(&mut rng);
+    let wrong_authority = key(&mut rng);
+    let static_key = key(&mut rng);
+    let certificate = Certificate::issue_with_rng(
+        &static_key.x_only_public_key().0,
+        &authority,
+        100,
+        200,
+        &mut rng,
+    )
+    .unwrap();
+    let identities = [
+        ResponderIdentity::Unauthenticated,
+        ResponderIdentity::Authority {
+            authority,
+            certificate_validity: 60,
+        },
+        ResponderIdentity::Certified(
+            CertifiedStaticKey::new(static_key, certificate, &authority.x_only_public_key().0)
+                .unwrap(),
+        ),
+    ];
+    let policies = [
+        InitiatorAuthentication::Unauthenticated,
+        InitiatorAuthentication::Authority(authority.x_only_public_key().0),
+        InitiatorAuthentication::Authority(wrong_authority.x_only_public_key().0),
+    ];
+    for (identity_index, identity) in identities.iter().enumerate() {
+        for (policy_index, policy) in policies.iter().enumerate() {
+            let result = handshake(identity, *policy, 150, &mut rng);
+            if policy_index == 0 || (policy_index == 1 && identity_index != 0) {
+                let (mut initiator, mut responder, _) = result.unwrap();
+                round_trip(&mut initiator, &mut responder);
+            } else {
+                assert!(matches!(result, Err(Error::InvalidCertificate(_))));
+            }
+        }
+    }
+}
 
-    let mut initiator: Box<Initiator> =
-        Initiator::new_with_rng(Some(key_pair.public_key().into()), &mut rand::thread_rng());
-    let mut responder = Responder::new_with_rng(key_pair, 31449600, &mut rand::thread_rng());
-    let first_message = initiator.step_0().unwrap();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as u32;
-    let (second_message, mut responder_engine) = responder
-        .step_1_with_now_rng(first_message, now, &mut rand::thread_rng())
+#[test]
+#[cfg_attr(miri, ignore)]
+fn certified_identity_is_reusable_with_fresh_ephemerals() {
+    let mut rng = StdRng::seed_from_u64(7);
+    let authority = key(&mut rng);
+    let static_key = key(&mut rng);
+    let authority_pk = authority.x_only_public_key().0;
+    let certificate = Certificate::issue_with_rng(
+        &static_key.x_only_public_key().0,
+        &authority,
+        100,
+        200,
+        &mut rng,
+    )
+    .unwrap();
+    let identity = ResponderIdentity::Certified(
+        CertifiedStaticKey::new(static_key, certificate, &authority_pk).unwrap(),
+    );
+    let mut previous_ephemeral = None;
+    for _ in 0..3 {
+        let (mut initiator, mut responder, response) = handshake(
+            &identity,
+            InitiatorAuthentication::Authority(authority_pk),
+            150,
+            &mut rng,
+        )
         .unwrap();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as u32;
-    let mut initiator_engine = initiator.step_2_with_now(second_message, now).unwrap();
-    let mut message = "ciao".as_bytes().to_vec();
-    initiator_engine.encrypt(&mut message).unwrap();
-    assert!(message != "ciao".as_bytes().to_vec());
-    responder_engine.decrypt(&mut message).unwrap();
-
-    assert!(message == "ciao".as_bytes().to_vec());
+        round_trip(&mut initiator, &mut responder);
+        assert_ne!(previous_ephemeral.as_deref(), Some(&response[..64]));
+        previous_ephemeral = Some(response[..64].to_vec());
+    }
 }
 
 #[test]
-#[cfg(feature = "std")]
 #[cfg_attr(miri, ignore)]
-fn pre_issued_certificate_is_sent_verbatim() {
-    use crate::{
-        signature_message::SignatureNoiseMessage, Error, CERTIFICATE_VERSION,
-        SIGNATURE_NOISE_MESSAGE_SIZE,
-    };
+fn expired_certificate_is_sent_verbatim_and_rejected_by_authenticated_initiator() {
+    let mut rng = StdRng::seed_from_u64(10);
+    let authority = key(&mut rng);
+    let static_key = key(&mut rng);
+    let authority_pk = authority.x_only_public_key().0;
+    let certificate = Certificate::issue_with_rng(
+        &static_key.x_only_public_key().0,
+        &authority,
+        100,
+        200,
+        &mut rng,
+    )
+    .unwrap();
+    let encoded = certificate.to_bytes();
+    let identity = ResponderIdentity::Certified(
+        CertifiedStaticKey::new(static_key, certificate, &authority_pk).unwrap(),
+    );
+    for now in [89, 211] {
+        match handshake(
+            &identity,
+            InitiatorAuthentication::Authority(authority_pk),
+            now,
+            &mut rng,
+        ) {
+            Err(Error::InvalidCertificate(received)) => assert_eq!(received.to_bytes(), encoded),
+            _ => panic!("out-of-window certificate must be rejected"),
+        }
+    }
+    // Choosing unauthenticated operation skips certificate authentication and time checks.
+    let (mut initiator, mut responder, _) = handshake(
+        &identity,
+        InitiatorAuthentication::Unauthenticated,
+        211,
+        &mut rng,
+    )
+    .unwrap();
+    round_trip(&mut initiator, &mut responder);
+}
 
-    // Issued where the authority private key lives; the responder never sees that key.
-    let authority = Responder::generate_key();
-    let server_static = Responder::generate_key();
-    let issue = |valid_from: u32, not_valid_after: u32| {
-        let mut certificate = [0u8; SIGNATURE_NOISE_MESSAGE_SIZE];
-        certificate[0..2].copy_from_slice(&CERTIFICATE_VERSION.to_le_bytes());
-        certificate[2..6].copy_from_slice(&valid_from.to_le_bytes());
-        certificate[6..10].copy_from_slice(&not_valid_after.to_le_bytes());
-        SignatureNoiseMessage::sign(
-            &mut certificate,
-            &server_static.x_only_public_key().0,
-            &authority,
-        );
-        certificate
-    };
-    let handshake = |certificate| {
-        let mut initiator = Initiator::new(Some(authority.public_key().into()));
-        let mut responder = Responder::from_certificate(server_static, certificate);
-        let first_message = initiator.step_0().unwrap();
-        let (second_message, responder_engine) = responder.step_1(first_message).unwrap();
-        initiator
-            .step_2(second_message)
-            .map(|initiator_engine| (initiator_engine, responder_engine))
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as u32;
-
-    let (mut initiator_engine, mut responder_engine) =
-        handshake(issue(now - 60, now + 60)).unwrap();
-    let mut message = "ciao".as_bytes().to_vec();
-    initiator_engine.encrypt(&mut message).unwrap();
-    assert!(message != "ciao".as_bytes().to_vec());
-    responder_engine.decrypt(&mut message).unwrap();
-    assert!(message == "ciao".as_bytes().to_vec());
-
-    // The validity window travels inside the certificate: an expired one is sent as is, and the
-    // initiator rejects it.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn credential_pairing_rejects_wrong_keys_and_modified_certificates() {
+    let mut rng = StdRng::seed_from_u64(11);
+    let authority = key(&mut rng);
+    let static_key = key(&mut rng);
+    let wrong_key = key(&mut rng);
+    let authority_pk = authority.x_only_public_key().0;
+    let certificate = Certificate::issue_with_rng(
+        &static_key.x_only_public_key().0,
+        &authority,
+        100,
+        200,
+        &mut rng,
+    )
+    .unwrap();
     assert!(matches!(
-        handshake(issue(now - 120, now - 60)),
+        CertifiedStaticKey::new(wrong_key, certificate.clone(), &authority_pk),
         Err(Error::InvalidCertificate(_))
     ));
+    assert!(matches!(
+        CertifiedStaticKey::new(
+            static_key,
+            certificate.clone(),
+            &wrong_key.x_only_public_key().0
+        ),
+        Err(Error::InvalidCertificate(_))
+    ));
+    for index in [0, 2, 6, 10, 73] {
+        let mut bytes = certificate.to_bytes();
+        bytes[index] ^= 1;
+        assert!(matches!(
+            CertifiedStaticKey::new(static_key, bytes.into(), &authority_pk),
+            Err(Error::InvalidCertificate(_))
+        ));
+    }
 }

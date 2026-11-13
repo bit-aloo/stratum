@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use noise_sv2::{Initiator, Responder};
+use noise_sv2::{Initiator, InitiatorAuthentication, Responder, ResponderIdentity};
 
 use crate::common::{generate_key_with_rng, rng};
 mod common;
@@ -9,7 +9,7 @@ fn bench_nx_handshake(c: &mut Criterion) {
 
     group.bench_function("step_0_initiator", |b| {
         b.iter_batched(
-            || Initiator::new(None),
+            || Initiator::new(InitiatorAuthentication::Unauthenticated),
             |mut initiator| {
                 let _msg_0 = initiator.step_0().unwrap();
             },
@@ -22,8 +22,11 @@ fn bench_nx_handshake(c: &mut Criterion) {
             || {
                 let mut rng = rng();
                 let responder_key = generate_key_with_rng(&mut rng);
-                let mut initiator = Initiator::new(None);
-                let responder = Responder::new(responder_key, 60);
+                let mut initiator = Initiator::new(InitiatorAuthentication::Unauthenticated);
+                let responder = Responder::new(&ResponderIdentity::Authority {
+                    authority: responder_key,
+                    certificate_validity: 60,
+                });
 
                 let msg_0 = initiator.step_0().unwrap();
                 (responder, msg_0, rng)
@@ -40,8 +43,11 @@ fn bench_nx_handshake(c: &mut Criterion) {
             || {
                 let mut rng = rng();
                 let responder_key = generate_key_with_rng(&mut rng);
-                let mut initiator = Initiator::new(None);
-                let mut responder = Responder::new(responder_key, 60);
+                let mut initiator = Initiator::new(InitiatorAuthentication::Unauthenticated);
+                let mut responder = Responder::new(&ResponderIdentity::Authority {
+                    authority: responder_key,
+                    certificate_validity: 60,
+                });
 
                 let msg_0 = initiator.step_0().unwrap();
                 let (msg_2, _) = responder.step_1_with_now_rng(msg_0, 10, &mut rng).unwrap();
@@ -60,8 +66,11 @@ fn bench_nx_handshake(c: &mut Criterion) {
             || {
                 let mut rng = rng();
                 let responder_key = generate_key_with_rng(&mut rng);
-                let initiator = Initiator::new(None);
-                let responder = Responder::new(responder_key, 60);
+                let initiator = Initiator::new(InitiatorAuthentication::Unauthenticated);
+                let responder = Responder::new(&ResponderIdentity::Authority {
+                    authority: responder_key,
+                    certificate_validity: 60,
+                });
                 (initiator, responder, rng)
             },
             |(mut initiator, mut responder, mut rng)| {

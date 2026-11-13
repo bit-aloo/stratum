@@ -1,261 +1,268 @@
-// # Signature-Based Message Handling
-//
-// Defines the [`SignatureNoiseMessage`] struct, which represents a signed message used in the
-// Noise protocol to authenticate and verify the identity of a party during the handshake.
-//
-// This module provides utilities for creating, signing, and verifying Noise protocol messages
-// using Schnorr signatures over the [`secp256k1`] elliptic curve. It encapsulates signed messages
-// along with versioning and validity timestamps. The following capabilities are supported:
-//
-// - Conversion between the 74-byte wire layout and structured [`SignatureNoiseMessage`] instances.
-// - Message signing using Schnorr signatures and the [`secp256k1`] curve.
-// - Verification of signed messages, ensuring they fall within valid time periods and are signed by
-//   an authorized public key.
-//
-// ## Usage
-//
-// The [`SignatureNoiseMessage`] is the certificate a [`crate::Responder`] presents. Whoever holds
-// the authority key, the responder itself or a separate issuer, uses the `sign` method to produce
-// a Schnorr signature over the version, the validity period and the responder's static public
-// key. The [`crate::Initiator`] uses the `verify` method to check the validity of the signed
-// message from the responder, comparing it against the provided public key and optional authority
-// key, while ensuring the message falls within the specified validity period.
-
-use core::convert::TryInto;
-use core::fmt;
+use core::{convert::TryInto, fmt};
 
 use secp256k1::{hashes::sha256, schnorr::Signature, Keypair, Message, Secp256k1, XOnlyPublicKey};
 
-/// `SignatureNoiseMessage` represents a signed message used in the Noise NX protocol
-/// for authentication during the handshake process. It encapsulates the necessary
-/// details for signature verification, including protocol versioning, validity periods,
-/// and a Schnorr signature over the message.
+use crate::{Error, CERTIFICATE_TIME_LEEWAY, CERTIFICATE_VERSION, SIGNATURE_NOISE_MESSAGE_SIZE};
+
+/// The 74-byte `SIGNATURE_NOISE_MESSAGE` carried by the Noise handshake.
 ///
-/// This structure ensures that messages are authenticated and valid only within
-/// a specified time window, using Schnorr signatures over the `secp256k1` elliptic curve.
-#[derive(Debug, PartialEq, Eq)]
-pub struct SignatureNoiseMessage {
-    /// Certificate format version; only [`crate::CERTIFICATE_VERSION`] verifies.
-    pub version: u16,
-    /// Start of the validity period for the message, expressed as a Unix timestamp.
-    pub valid_from: u32,
-    /// End of the validity period for the message, expressed as a Unix timestamp.
-    pub not_valid_after: u32,
-    /// 64-byte Schnorr signature that authenticates the message.
-    pub signature: [u8; 64],
+/// A certificate signs its version, validity window, and the responder's static public key.
+/// Decoding bytes does not authenticate them; use [`Self::verify_with_now`] with the authority
+/// public key. Use [`Self::issue_with_rng`] on the machine holding the authority private key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Certificate {
+    version: u16,
+    valid_from: u32,
+    not_valid_after: u32,
+    signature: [u8; 64],
 }
 
-impl fmt::Display for SignatureNoiseMessage {
+impl fmt::Display for Certificate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // write header
         write!(
             f,
-            "SignatureNoiseMessage {{ version: {}, valid_from: {}, not_valid_after: {}, signature: ",
+            "Certificate {{ version: {}, valid_from: {}, not_valid_after: {}, signature: ",
             self.version, self.valid_from, self.not_valid_after
         )?;
-
-        // write signature as hex manually
         for byte in &self.signature {
-            write!(f, "{:02x}", byte)?;
+            write!(f, "{byte:02x}")?;
         }
-
         write!(f, " }}")
     }
 }
-impl From<SignatureNoiseMessage> for [u8; 74] {
-    /// Encodes a [`SignatureNoiseMessage`] in the 74-byte layout the handshake carries: the
-    /// little-endian `version`, `valid_from` and `not_valid_after`, then the signature. The inverse
-    /// of the conversion from bytes.
-    fn from(value: SignatureNoiseMessage) -> Self {
-        let (header, signature) = value.split();
-        let mut encoded = [0; 74];
-        encoded[0..10].copy_from_slice(&header);
-        encoded[10..74].copy_from_slice(&signature);
-        encoded
-    }
-}
 
-impl From<[u8; 74]> for SignatureNoiseMessage {
-    /// Decodes the 74-byte layout the handshake carries: the little-endian `version`, `valid_from`
-    /// and `not_valid_after`, then the signature.
-    fn from(value: [u8; 74]) -> Self {
-        let version = u16::from_le_bytes(value[0..2].try_into().unwrap());
-        let valid_from = u32::from_le_bytes(value[2..6].try_into().unwrap());
-        let not_valid_after = u32::from_le_bytes(value[6..10].try_into().unwrap());
-        let signature = value[10..74].try_into().unwrap();
+impl From<[u8; SIGNATURE_NOISE_MESSAGE_SIZE]> for Certificate {
+    /// Decodes the wire layout without validating its contents.
+    fn from(value: [u8; SIGNATURE_NOISE_MESSAGE_SIZE]) -> Self {
         Self {
-            version,
-            valid_from,
-            not_valid_after,
-            signature,
+            version: u16::from_le_bytes(value[0..2].try_into().unwrap()),
+            valid_from: u32::from_le_bytes(value[2..6].try_into().unwrap()),
+            not_valid_after: u32::from_le_bytes(value[6..10].try_into().unwrap()),
+            signature: value[10..].try_into().unwrap(),
         }
     }
 }
 
-impl SignatureNoiseMessage {
-    /// Verifies the [`SignatureNoiseMessage`] against the provided public key and an optional
-    /// authority public key at the current system time. See [`Self::verify_with_now`].
+impl From<Certificate> for [u8; SIGNATURE_NOISE_MESSAGE_SIZE] {
+    fn from(value: Certificate) -> Self {
+        value.to_bytes()
+    }
+}
+
+impl Certificate {
+    /// Certificate format version. Only [`CERTIFICATE_VERSION`] is supported.
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    /// Start of the validity window, as a Unix timestamp in seconds.
+    pub fn valid_from(&self) -> u32 {
+        self.valid_from
+    }
+
+    /// End of the validity window, as a Unix timestamp in seconds.
+    pub fn not_valid_after(&self) -> u32 {
+        self.not_valid_after
+    }
+
+    /// Encodes the little-endian version and timestamps followed by the Schnorr signature.
+    pub fn to_bytes(&self) -> [u8; SIGNATURE_NOISE_MESSAGE_SIZE] {
+        let mut encoded = [0; SIGNATURE_NOISE_MESSAGE_SIZE];
+        encoded[..10].copy_from_slice(&self.header());
+        encoded[10..].copy_from_slice(&self.signature);
+        encoded
+    }
+
+    /// Issues a certificate over `static_pk`, using system randomness for the Schnorr signature.
+    ///
+    /// Returns [`Error::InvalidCertificate`] if the validity window is reversed.
     #[cfg(feature = "std")]
-    pub fn verify(self, pk: &XOnlyPublicKey, authority_pk: &Option<XOnlyPublicKey>) -> bool {
+    pub fn issue(
+        static_pk: &XOnlyPublicKey,
+        authority: &Keypair,
+        valid_from: u32,
+        not_valid_after: u32,
+    ) -> Result<Self, Error> {
+        Self::issue_with_rng(
+            static_pk,
+            authority,
+            valid_from,
+            not_valid_after,
+            &mut rand::thread_rng(),
+        )
+    }
+
+    /// Issues a certificate over `static_pk` with an explicit random number generator.
+    ///
+    /// The issuer chooses Unix timestamps in seconds. Returns [`Error::InvalidCertificate`] if
+    /// `valid_from > not_valid_after`. The certificate can be issued before its validity starts.
+    pub fn issue_with_rng<R: rand::Rng + rand::CryptoRng>(
+        static_pk: &XOnlyPublicKey,
+        authority: &Keypair,
+        valid_from: u32,
+        not_valid_after: u32,
+        rng: &mut R,
+    ) -> Result<Self, Error> {
+        let mut certificate = Self {
+            version: CERTIFICATE_VERSION,
+            valid_from,
+            not_valid_after,
+            signature: [0; 64],
+        };
+        if valid_from > not_valid_after {
+            return Err(Error::InvalidCertificate(certificate));
+        }
+        let message = certificate.signing_message(static_pk);
+        certificate.signature = *Secp256k1::signing_only()
+            .sign_schnorr_with_rng(&message, authority, rng)
+            .as_ref();
+        Ok(certificate)
+    }
+
+    /// Authenticates the certificate and its validity window at the current system time.
+    #[cfg(feature = "std")]
+    pub fn verify(&self, static_pk: &XOnlyPublicKey, authority_pk: &XOnlyPublicKey) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as u32;
-        self.verify_with_now(pk, authority_pk, now)
+        self.verify_with_now(static_pk, authority_pk, now)
     }
 
-    /// Verifies the validity and authenticity of the `SignatureNoiseMessage` at a given timestamp
-    /// with [`crate::CERTIFICATE_TIME_LEEWAY`] seconds of tolerance.
+    /// Authenticates this certificate over `static_pk` using the required authority public key.
     ///
-    /// With an authority public key, the message must carry the supported certificate version,
-    /// `now` must fall inside its validity window, and its signature over the responder's static
-    /// key `pk` must verify against the authority key.
-    ///
-    /// # Security
-    ///
-    /// Without an authority public key, only the certificate version is checked and the message is
-    /// otherwise accepted unverified, so `true` does not mean the responder was authenticated.
-    ///
-    /// The current system time should be provided to avoid relying on `std` and allow `no_std`
-    /// environments to use another source of time.
-    #[inline]
+    /// Checks the version, ordered validity window, Schnorr signature, and `now` (a Unix timestamp
+    /// in seconds), allowing [`CERTIFICATE_TIME_LEEWAY`] seconds of clock drift at each edge.
     pub fn verify_with_now(
-        self,
-        pk: &XOnlyPublicKey,
-        authority_pk: &Option<XOnlyPublicKey>,
+        &self,
+        static_pk: &XOnlyPublicKey,
+        authority_pk: &XOnlyPublicKey,
         now: u32,
     ) -> bool {
-        use crate::CERTIFICATE_TIME_LEEWAY as TIME_LEEWAY;
+        self.valid_from.saturating_sub(CERTIFICATE_TIME_LEEWAY) <= now
+            && self.not_valid_after.saturating_add(CERTIFICATE_TIME_LEEWAY) >= now
+            && self.verify_signature(static_pk, authority_pk)
+    }
 
-        if self.version != crate::CERTIFICATE_VERSION {
+    // Binding and format checks are independent of time so servers can stage a future certificate.
+    pub(crate) fn verify_signature(
+        &self,
+        static_pk: &XOnlyPublicKey,
+        authority_pk: &XOnlyPublicKey,
+    ) -> bool {
+        if self.version != CERTIFICATE_VERSION || self.valid_from > self.not_valid_after {
             return false;
         }
+        let signature =
+            Signature::from_slice(&self.signature).expect("a Schnorr signature is 64 bytes");
+        Secp256k1::verification_only()
+            .verify_schnorr(&signature, &self.signing_message(static_pk), authority_pk)
+            .is_ok()
+    }
 
-        if let Some(authority_pk) = authority_pk {
-            // Use saturating ops to cap edges (valid_from ≥ 0, not_valid_after ≤ u32::MAX),
-            // preventing wrap-around and subtle validation bugs with untrusted timestamps.
-            if self.valid_from.saturating_sub(TIME_LEEWAY) <= now
-                && self.not_valid_after.saturating_add(TIME_LEEWAY) >= now
-            {
-                let secp = Secp256k1::verification_only();
-                let (m, s) = self.split();
-                // m = SHA-256(version || valid_from || not_valid_after || server_static_key)
-                let m = [&m[0..10], &pk.serialize()].concat();
-                let m = Message::from_hashed_data::<sha256::Hash>(&m);
-                let s = match Signature::from_slice(&s) {
-                    Ok(s) => s,
-                    _ => return false,
-                };
-                secp.verify_schnorr(&s, &m, authority_pk).is_ok()
-            } else {
-                false
-            }
-        } else {
-            true
+    // Unauthenticated responders still send the versioned payload required by the NX wire format.
+    pub(crate) fn unauthenticated() -> Self {
+        Self {
+            version: CERTIFICATE_VERSION,
+            valid_from: 0,
+            not_valid_after: u32::MAX,
+            signature: [0; 64],
         }
     }
 
-    /// Signs a [`SignatureNoiseMessage`] using the provided keypair (`kp`).
-    ///
-    /// `msg` holds the encoded message, as produced by the conversion into `[u8; 74]`; its first 10
-    /// bytes (version and validity period) are signed together with the static public key of the
-    /// server (`static_pk`), and the resulting signature is written into its remaining 64 bytes.
-    #[cfg(feature = "std")]
-    pub fn sign(msg: &mut [u8; 74], static_pk: &XOnlyPublicKey, kp: &Keypair) {
-        Self::sign_with_rng(msg, static_pk, kp, &mut rand::thread_rng());
+    fn header(&self) -> [u8; 10] {
+        let mut header = [0; 10];
+        header[..2].copy_from_slice(&self.version.to_le_bytes());
+        header[2..6].copy_from_slice(&self.valid_from.to_le_bytes());
+        header[6..10].copy_from_slice(&self.not_valid_after.to_le_bytes());
+        header
     }
 
-    /// Signs a [`SignatureNoiseMessage`] using the provided keypair (`kp`) and a custom random
-    /// number generator.
-    ///
-    /// See [`Self::sign`] for more details.
-    ///
-    /// The random number generator is used in the signature generation. It should be provided in
-    /// order to not implicitely rely on `std` and allow `no_std` environments to provide a
-    /// hardware random number generator for example.
-    #[inline]
-    pub fn sign_with_rng<R: rand::Rng + rand::CryptoRng>(
-        msg: &mut [u8; 74],
-        static_pk: &XOnlyPublicKey,
-        kp: &Keypair,
-        rng: &mut R,
-    ) {
-        let secp = Secp256k1::signing_only();
-        let m = [&msg[0..10], &static_pk.serialize()].concat();
-        let m = Message::from_hashed_data::<sha256::Hash>(&m);
-        let signature = secp.sign_schnorr_with_rng(&m, kp, rng);
-        for (i, b) in signature.as_ref().iter().enumerate() {
-            msg[10 + i] = *b;
-        }
-    }
-
-    // Splits the [`SignatureNoiseMessage`] into its component parts: the message hash and the
-    // signature.
-    //
-    // Separates the message into the first 10 bytes (containing the version and validity period)
-    // and the 64-byte Schnorr signature, returning them in a tuple. Used internally during the
-    // verification process.
-    fn split(self) -> ([u8; 10], [u8; 64]) {
-        let mut m = [0; 10];
-        m[0] = self.version.to_le_bytes()[0];
-        m[1] = self.version.to_le_bytes()[1];
-        m[2] = self.valid_from.to_le_bytes()[0];
-        m[3] = self.valid_from.to_le_bytes()[1];
-        m[4] = self.valid_from.to_le_bytes()[2];
-        m[5] = self.valid_from.to_le_bytes()[3];
-        m[6] = self.not_valid_after.to_le_bytes()[0];
-        m[7] = self.not_valid_after.to_le_bytes()[1];
-        m[8] = self.not_valid_after.to_le_bytes()[2];
-        m[9] = self.not_valid_after.to_le_bytes()[3];
-        (m, self.signature)
+    fn signing_message(&self, static_pk: &XOnlyPublicKey) -> Message {
+        let mut payload = [0; 42];
+        payload[..10].copy_from_slice(&self.header());
+        payload[10..].copy_from_slice(&static_pk.serialize());
+        Message::from_hashed_data::<sha256::Hash>(&payload)
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+    use rand::{rngs::StdRng, SeedableRng};
 
     #[test]
     fn byte_encoding_round_trips() {
-        let mut encoded = [0u8; 74];
-        for (i, b) in encoded.iter_mut().enumerate() {
-            *b = i as u8;
+        let mut encoded = [0; SIGNATURE_NOISE_MESSAGE_SIZE];
+        for (index, byte) in encoded.iter_mut().enumerate() {
+            *byte = index as u8;
         }
-        let message = SignatureNoiseMessage::from(encoded);
-        assert_eq!(message.version, u16::from_le_bytes([0, 1]));
-        assert_eq!(message.valid_from, u32::from_le_bytes([2, 3, 4, 5]));
-        assert_eq!(message.not_valid_after, u32::from_le_bytes([6, 7, 8, 9]));
-        assert_eq!(<[u8; 74]>::from(message), encoded);
+        let certificate = Certificate::from(encoded);
+        assert_eq!(certificate.version(), u16::from_le_bytes([0, 1]));
+        assert_eq!(certificate.valid_from(), u32::from_le_bytes([2, 3, 4, 5]));
+        assert_eq!(
+            certificate.not_valid_after(),
+            u32::from_le_bytes([6, 7, 8, 9])
+        );
+        assert_eq!(certificate.to_bytes(), encoded);
     }
 
     #[test]
-    #[cfg(feature = "std")]
     #[cfg_attr(miri, ignore)]
-    fn verify_rejects_unsupported_certificate_version() {
-        use rand::{rngs::StdRng, SeedableRng};
-
-        let secp = Secp256k1::new();
+    fn verification_checks_clock_edges_and_saturates() {
         let mut rng = StdRng::seed_from_u64(42);
-        let authority = Keypair::new(&secp, &mut rng);
-        let responder_static = Keypair::new(&secp, &mut rng);
+        let authority = Keypair::new(&Secp256k1::new(), &mut rng);
+        let static_key = Keypair::new(&Secp256k1::new(), &mut rng);
+        let pk = static_key.x_only_public_key().0;
+        let authority_pk = authority.x_only_public_key().0;
+        let certificate = Certificate::issue_with_rng(&pk, &authority, 100, 200, &mut rng).unwrap();
+        for (now, accepted) in [
+            (89, false),
+            (90, true),
+            (150, true),
+            (210, true),
+            (211, false),
+        ] {
+            assert_eq!(
+                certificate.verify_with_now(&pk, &authority_pk, now),
+                accepted
+            );
+        }
+        let low = Certificate::issue_with_rng(&pk, &authority, 0, 0, &mut rng).unwrap();
+        assert!(low.verify_with_now(&pk, &authority_pk, 0));
+        assert!(!low.verify_with_now(&pk, &authority_pk, u32::MAX));
+        let high =
+            Certificate::issue_with_rng(&pk, &authority, u32::MAX, u32::MAX, &mut rng).unwrap();
+        assert!(high.verify_with_now(&pk, &authority_pk, u32::MAX));
+        assert!(!high.verify_with_now(&pk, &authority_pk, 0));
+    }
 
-        let mut encoded = [0u8; 74];
-        encoded[0..2].copy_from_slice(&(crate::CERTIFICATE_VERSION + 1).to_le_bytes());
-        encoded[2..6].copy_from_slice(&100u32.to_le_bytes());
-        encoded[6..10].copy_from_slice(&200u32.to_le_bytes());
-        SignatureNoiseMessage::sign_with_rng(
-            &mut encoded,
-            &responder_static.x_only_public_key().0,
-            &authority,
-            &mut rng,
-        );
-
-        let certificate = SignatureNoiseMessage::from(encoded);
-        let authority_pk = Some(authority.x_only_public_key().0);
-        assert!(!certificate.verify_with_now(
-            &responder_static.x_only_public_key().0,
-            &authority_pk,
-            150,
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn signed_unsupported_version_and_reversed_window_are_rejected() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let authority = Keypair::new(&Secp256k1::new(), &mut rng);
+        let static_key = Keypair::new(&Secp256k1::new(), &mut rng);
+        let pk = static_key.x_only_public_key().0;
+        let authority_pk = authority.x_only_public_key().0;
+        assert!(matches!(
+            Certificate::issue_with_rng(&pk, &authority, 110, 100, &mut rng),
+            Err(Error::InvalidCertificate(_))
         ));
+        for (version, start, end) in [
+            (CERTIFICATE_VERSION + 1, 100, 200),
+            (CERTIFICATE_VERSION, 110, 100),
+        ] {
+            let mut certificate = Certificate {
+                version,
+                valid_from: start,
+                not_valid_after: end,
+                signature: [0; 64],
+            };
+            certificate.signature = *Secp256k1::signing_only()
+                .sign_schnorr_with_rng(&certificate.signing_message(&pk), &authority, &mut rng)
+                .as_ref();
+            assert!(!certificate.verify_with_now(&pk, &authority_pk, 105));
+        }
     }
 }

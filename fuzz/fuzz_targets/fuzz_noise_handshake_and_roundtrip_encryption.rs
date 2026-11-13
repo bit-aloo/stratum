@@ -2,7 +2,7 @@
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use noise_sv2::{Initiator, Responder};
+use noise_sv2::{Initiator, InitiatorAuthentication, Responder, ResponderIdentity};
 use secp256k1::{Keypair, Secp256k1, XOnlyPublicKey};
 
 use rand::{rngs::StdRng, SeedableRng};
@@ -87,11 +87,11 @@ fuzz_target!(|input: FuzzInput| {
     // This affects the Noise handshake pattern (anonymous vs authenticated)
     let known_peer = match input.peer_mode {
         // Initiator has no prior knowledge of responder -> performs anonymous handshake
-        PeerMode::Unknown => None,
+        PeerMode::Unknown => InitiatorAuthentication::Unauthenticated,
         // Initiator knows responder's exact public key -> authenticated handshake
-        PeerMode::Known => Some(responder_pk),
+        PeerMode::Known => InitiatorAuthentication::Authority(responder_pk),
         // Initiator knows a DIFFERENT peer's key -> handshake should fail
-        PeerMode::PeerDifferentFromResponder => Some(
+        PeerMode::PeerDifferentFromResponder => InitiatorAuthentication::Authority(
             generate_key(input.rand_seed ^ 0xcafe_babe)
                 .public_key()
                 .x_only_public_key()
@@ -103,7 +103,10 @@ fuzz_target!(|input: FuzzInput| {
     let mut initiator = Initiator::new(known_peer);
 
     // Create responder (server) with the generated keypair and certificate validity
-    let mut responder = Responder::new(responder_kp, input.cert_validity);
+    let mut responder = Responder::new(&ResponderIdentity::Authority {
+        authority: responder_kp,
+        certificate_validity: input.cert_validity,
+    });
 
     // ========== Handshake Phase ==========
 

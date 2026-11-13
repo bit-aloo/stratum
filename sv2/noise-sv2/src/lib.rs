@@ -31,27 +31,20 @@
 //! validate the identities of the Sv2 roles, ensuring that critical messages like job templates
 //! and share submissions originate from legitimate sources.
 //!
-//! ## Responder authentication
+//! ## Authentication and identity
 //!
-//! The responder is only authenticated when the [`Initiator`] is given the responder's authority
-//! public key, which it uses to verify the certificate received during the handshake. An
-//! [`Initiator`] built without one, through `Initiator::without_pk` or `Initiator::new` with
-//! `None`, accepts any responder and yields an encrypted but unauthenticated session that the
-//! crate does not distinguish from an authenticated one. Always pin the authority key for
-//! connections that cross a network boundary.
+//! [`InitiatorAuthentication`] explicitly selects whether the initiator pins an authority public
+//! key or accepts an encrypted, unauthenticated connection. Use authority authentication across
+//! network boundaries. The resulting [`NoiseEngine`] has the same type in either mode.
 //!
-//! ## Authority key custody
+//! [`ResponderIdentity`] selects one of three credential sources: no authentication, authority
+//! signing at handshake time, or a pre-issued [`Certificate`] paired with its static key through
+//! [`CertifiedStaticKey`]. Construct a fresh [`Responder`] per connection, borrowing the identity.
 //!
-//! Clients pin the authority public key, and neither the spec nor this crate defines revocation,
-//! so a leaked authority private key impersonates the operator for as long as any client trusts it.
-//! [`Responder::from_certificate`] lets an internet-facing server hold only its static key and a
-//! certificate over it, signed where the authority private key is kept. [`Responder::new`] and
-//! [`Responder::from_authority_kp`] instead sign a certificate on every handshake and need the
-//! authority private key on the server; they are meant for development and testing.
-//!
-//! [`SignatureNoiseMessage`] is the certificate itself: the issuer encodes the version and the
-//! validity window with its `From` conversion into bytes, signs them over the server's static key
-//! with [`SignatureNoiseMessage::sign_with_rng`], and hands the 74 bytes to the server.
+//! Production servers should hold only a certified static key. The authority private key stays
+//! with the issuer, which calls [`Certificate::issue_with_rng`]. Authority signing on the server
+//! is intended for development and testing: neither this crate nor the specification defines
+//! revocation, so a leaked authority key can impersonate the operator as long as clients trust it.
 
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 
@@ -66,6 +59,7 @@ mod aed_cipher;
 mod cipher_state;
 mod error;
 mod handshake;
+mod identity;
 mod initiator;
 mod responder;
 mod signature_message;
@@ -112,7 +106,7 @@ pub const INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE: usize = ELLSWIFT_ENCODING_S
 pub const CERTIFICATE_VERSION: u16 = 0;
 
 /// Clock drift, in seconds, tolerated on both edges of a certificate's validity window by
-/// [`SignatureNoiseMessage::verify_with_now`], so that peers whose clocks disagree slightly still
+/// [`Certificate::verify_with_now`], so that peers whose clocks disagree slightly still
 /// complete the handshake. See <https://github.com/stratum-mining/stratum/issues/2015>.
 pub const CERTIFICATE_TIME_LEEWAY: u32 = 10;
 
@@ -213,6 +207,7 @@ impl NoiseDecryptor {
 }
 
 pub use error::Error;
+pub use identity::{CertifiedStaticKey, InitiatorAuthentication, ResponderIdentity};
 pub use initiator::Initiator;
 pub use responder::Responder;
-pub use signature_message::SignatureNoiseMessage;
+pub use signature_message::Certificate;

@@ -12,7 +12,8 @@ use buffer_sv2::Buffer as IsBuffer;
 use core::time::Duration;
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use noise_sv2::{
-    Initiator, Responder, ELLSWIFT_ENCODING_SIZE, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE,
+    Initiator, InitiatorAuthentication, Responder, ResponderIdentity, ELLSWIFT_ENCODING_SIZE,
+    INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE,
 };
 
 pub(crate) const AUTHORITY_PUBLIC_K: &str = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72";
@@ -29,10 +30,13 @@ pub(crate) fn make_handshake_pair() -> (Handshake<Initiator>, Handshake<Responde
     let priv_k_bytes = priv_k.into_bytes();
 
     (
-        Handshake::initiator(Initiator::from_raw_k(pub_k_bytes).unwrap()),
-        Handshake::responder(
-            Responder::from_authority_kp(&pub_k_bytes, &priv_k_bytes, CERT_VALIDITY).unwrap(),
-        ),
+        Handshake::initiator(Initiator::new(
+            InitiatorAuthentication::from_raw_k(pub_k_bytes).unwrap(),
+        )),
+        Handshake::responder(Responder::new(
+            &ResponderIdentity::from_authority_kp(&pub_k_bytes, &priv_k_bytes, CERT_VALIDITY)
+                .unwrap(),
+        )),
     )
 }
 
